@@ -35,8 +35,10 @@ class RSBCMManager:
         if len(self._pool) <= self.cfg.max_blocks:
             return
         n_evict = len(self._pool) - self.cfg.max_blocks
+        # Lowest priority first: evict the least valuable blocks, keeping the
+        # shallow / high-importance ones that are shared by many branches.
         ordered = sorted(self._pool.values(), key=lambda b: b.priority)
-        for blk in ordered[-n_evict:]:
+        for blk in ordered[:n_evict]:
             del self._pool[blk.block_id]
             self.eviction_events += 1
 
