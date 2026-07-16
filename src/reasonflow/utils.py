@@ -1,5 +1,6 @@
 """Small helpers shared across ReasonFlow modules."""
 
+import copy
 from typing import List, Optional
 
 import torch
@@ -68,7 +69,18 @@ def clone_kv_cache(pkv):
     """Return a deep copy of a prefix KV cache so branches cannot mutate it."""
     if pkv is None:
         return None
-    # Hugging Face Cache objects (DynamicCache, StaticCache, etc.)
+    # Modern Hugging Face Cache objects (DynamicCache and model-specific
+    # subclasses such as Qwen3_5DynamicCache) expose key_cache/value_cache.
+    if hasattr(pkv, "key_cache") and hasattr(pkv, "value_cache"):
+        new_cache = copy.copy(pkv)
+        new_cache.key_cache = [
+            k.clone() if k is not None else None for k in pkv.key_cache
+        ]
+        new_cache.value_cache = [
+            v.clone() if v is not None else None for v in pkv.value_cache
+        ]
+        return new_cache
+    # Older iterable Cache objects.
     if hasattr(pkv, "update") and hasattr(pkv, "__iter__"):
         new_cache = DynamicCache()
         for layer_idx, (key_states, value_states, *_) in enumerate(pkv):
@@ -90,6 +102,18 @@ def expand_kv(pkv, batch_size: int):
     if hasattr(pkv, "batch_repeat_interleave"):
         expanded = clone_kv_cache(pkv)
         expanded.batch_repeat_interleave(batch_size)
+        return expanded
+    # Cache objects with key_cache/value_cache lists.
+    if hasattr(pkv, "key_cache") and hasattr(pkv, "value_cache"):
+        expanded = copy.copy(pkv)
+        expanded.key_cache = [
+            k.repeat_interleave(batch_size, dim=0) if k is not None else None
+            for k in pkv.key_cache
+        ]
+        expanded.value_cache = [
+            v.repeat_interleave(batch_size, dim=0) if v is not None else None
+            for v in pkv.value_cache
+        ]
         return expanded
     # Fallback for legacy tuple caches.
     new_cache = DynamicCache()

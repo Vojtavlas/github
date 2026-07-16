@@ -7,7 +7,7 @@
   ```powershell
   py -3.11 -m pip install -e .
   py -3.11 -m pytest -q
-  py -3.11 examples/simple_demo.py --model gpt2 --max-new-tokens 10
+  py -3.11 examples/simple_demo.py --max-new-tokens 10
   ```
 
 ## Verification commands
@@ -22,5 +22,5 @@ py -3.11 -m pytest -q
 
 ## Demo expectations
 
-- `examples/simple_demo.py` defaults to `Qwen/Qwen3.5-0.8B`. On CPU use `gpt2` for a quick smoke test, but expect nonsensical math answers because GPT-2 is not an instruction/reasoning model.
+- `examples/simple_demo.py` defaults to `Qwen/Qwen3.5-0.8B`. Use it for both demos and tests; set `HF_TOKEN` for higher Hugging Face Hub rate limits.
 - Set `HF_TOKEN` for higher Hugging Face Hub rate limits.
