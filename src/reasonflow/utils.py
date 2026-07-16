@@ -23,7 +23,7 @@ def load_model_and_tokenizer(
     dtype = torch.bfloat16 if "cuda" in str(device) else torch.float32
 
     kwargs = {
-        "torch_dtype": dtype,
+        "dtype": dtype,
         "attn_implementation": attn_impl,
         "trust_remote_code": True,
     }
@@ -36,13 +36,6 @@ def load_model_and_tokenizer(
     if not kwargs.get("device_map"):
         model = model.to(device)
     model.eval()
-
-    if hasattr(model, "generation_config"):
-        model.generation_config.temperature = None
-        model.generation_config.top_p = None
-        model.generation_config.top_k = None
-        model.generation_config.do_sample = False
-
     return model, tok
 
 
@@ -71,25 +64,41 @@ def squeeze_hidden(h):
     return h.squeeze(0)
 
 
+def clone_kv_cache(pkv):
+    """Return a deep copy of a prefix KV cache so branches cannot mutate it."""
+    if pkv is None:
+        return None
+    # Hugging Face Cache objects (DynamicCache, StaticCache, etc.)
+    if hasattr(pkv, "update") and hasattr(pkv, "__iter__"):
+        new_cache = DynamicCache()
+        for layer_idx, (key_states, value_states, *_) in enumerate(pkv):
+            new_cache.update(
+                key_states.clone(),
+                value_states.clone(),
+                layer_idx=layer_idx,
+            )
+        return new_cache
+    # Legacy tuple cache: tuple of (key, value) tensors per layer.
+    return tuple((k.clone(), v.clone()) for k, v in pkv)
+
+
 def expand_kv(pkv, batch_size: int):
     """Expand a batch-1 KV cache to a target batch size."""
     if pkv is None or batch_size == 1:
         return pkv
+    # Native batched expansion is available on modern Hugging Face Cache classes.
+    if hasattr(pkv, "batch_repeat_interleave"):
+        expanded = clone_kv_cache(pkv)
+        expanded.batch_repeat_interleave(batch_size)
+        return expanded
+    # Fallback for legacy tuple caches.
     new_cache = DynamicCache()
-    if hasattr(pkv, "key_cache") and len(pkv.key_cache) > 0:
-        for li in range(len(pkv.key_cache)):
+    if hasattr(pkv, "__iter__"):
+        for layer_idx, (key_states, value_states, *_) in enumerate(pkv):
             new_cache.update(
-                pkv.key_cache[li].repeat_interleave(batch_size, dim=0),
-                pkv.value_cache[li].repeat_interleave(batch_size, dim=0),
-                layer_idx=li,
-            )
-        return new_cache
-    if hasattr(pkv, "layers") and len(pkv.layers) > 0:
-        for li, layer in enumerate(pkv.layers):
-            new_cache.update(
-                layer.key.repeat_interleave(batch_size, dim=0),
-                layer.value.repeat_interleave(batch_size, dim=0),
-                layer_idx=li,
+                key_states.repeat_interleave(batch_size, dim=0),
+                value_states.repeat_interleave(batch_size, dim=0),
+                layer_idx=layer_idx,
             )
         return new_cache
     return pkv

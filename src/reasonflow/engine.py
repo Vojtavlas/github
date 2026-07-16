@@ -10,7 +10,7 @@ from .asks import ASKSManager
 from .cache import RSBCMManager
 from .cgee import CGEEAnalyzer
 from .config import EngineConfig
-from .utils import get_transformer_layers
+from .utils import clone_kv_cache, get_transformer_layers
 
 DEFAULT_BRANCH_HINTS = [
     "Approach 1: think step by step.",
@@ -159,6 +159,59 @@ class MultiBranchEngine:
             mean_conf = 0.0
         return sequence, mean_conf, pkv
 
+    def _continue_generate(
+        self,
+        first_logits: torch.Tensor,
+        past_key_values,
+        attention_mask: torch.Tensor,
+        max_new_tokens: int,
+    ) -> Tuple[torch.Tensor, float, object]:
+        """Continue autoregressive generation from a pre-computed first-token logit."""
+        generated: List[torch.Tensor] = []
+        confidences: List[torch.Tensor] = []
+        curr_mask = attention_mask
+        pkv = past_key_values
+        eos_id = self.tokenizer.eos_token_id
+
+        next_token, conf = self._sample(first_logits)
+        generated.append(next_token)
+        confidences.append(conf)
+        if next_token.item() == eos_id or max_new_tokens <= 1:
+            generated_ids = torch.stack(generated, dim=1)
+            mean_conf = torch.stack(confidences).mean().item()
+            return generated_ids, mean_conf, pkv
+
+        curr_ids = next_token.unsqueeze(-1)
+        curr_mask = torch.cat(
+            [curr_mask, torch.ones((1, 1), dtype=curr_mask.dtype, device=curr_mask.device)],
+            dim=1,
+        )
+
+        for _ in range(max_new_tokens - 1):
+            with torch.inference_mode():
+                out = self.model(
+                    input_ids=curr_ids,
+                    attention_mask=curr_mask,
+                    past_key_values=pkv,
+                    use_cache=True,
+                )
+            logits = out.logits[:, -1, :]
+            next_token, conf = self._sample(logits)
+            generated.append(next_token)
+            confidences.append(conf)
+            if next_token.item() == eos_id:
+                break
+            curr_ids = next_token.unsqueeze(-1)
+            curr_mask = torch.cat(
+                [curr_mask, torch.ones((1, 1), dtype=curr_mask.dtype, device=curr_mask.device)],
+                dim=1,
+            )
+            pkv = out.past_key_values
+
+        generated_ids = torch.stack(generated, dim=1)
+        mean_conf = torch.stack(confidences).mean().item()
+        return generated_ids, mean_conf, pkv
+
     def _generate_branch(
         self,
         problem: str,
@@ -167,28 +220,46 @@ class MultiBranchEngine:
         prefix_pkv,
         prefix_len: int,
     ) -> Tuple[BranchResult, float]:
-        """Generate one branch reusing the cached prefix."""
+        """Generate one branch, gating prefix KV reuse with ASKS."""
         prefix_str = self._shared_prefix(problem)
         hint = self._branch_hint(branch_id)
         suffix_ids = self._tokenize("\n" + hint, add_special_tokens=False)["input_ids"]
-        suffix_len = suffix_ids.shape[1]
 
         prefix_mask = torch.ones((1, prefix_len), dtype=torch.long, device=self.device)
         suffix_mask = torch.ones_like(suffix_ids)
         attention_mask = torch.cat([prefix_mask, suffix_mask], dim=1)
 
         t0 = time.perf_counter()
-        sequence, conf, _ = self._decode(
-            suffix_ids,
-            prefix_pkv,
-            attention_mask,
-            self.config.max_new_tokens,
-        )
+        branch_pkv = clone_kv_cache(prefix_pkv)
+        with torch.inference_mode():
+            prefill_out = self.model(
+                input_ids=suffix_ids,
+                attention_mask=attention_mask,
+                past_key_values=branch_pkv,
+                use_cache=True,
+                output_hidden_states=True,
+            )
+        branch_hidden = prefill_out.hidden_states
+        reuse = self.asks.score_branch(branch_id, branch_hidden)
+
+        if not reuse:
+            return self._generate_baseline_branch(problem, branch_id)
+
+        if self.config.max_new_tokens == 0:
+            generated_ids = suffix_ids.new_empty((1, 0))
+            conf = 0.0
+        else:
+            first_logits = prefill_out.logits[:, -1, :]
+            generated_ids, conf, _ = self._continue_generate(
+                first_logits,
+                prefill_out.past_key_values,
+                attention_mask,
+                self.config.max_new_tokens,
+            )
         gen_ms = (time.perf_counter() - t0) * 1000
 
-        full_sequence = torch.cat([prefix_ids, sequence], dim=1)
+        full_sequence = torch.cat([prefix_ids, suffix_ids, generated_ids], dim=1)
         full_text = self.tokenizer.decode(full_sequence[0], skip_special_tokens=True)
-        generated_ids = sequence[:, suffix_len:]
         text = self.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
         prompt = prefix_str + "\n" + hint
 
@@ -283,9 +354,10 @@ class MultiBranchEngine:
             root_out = self.model(
                 **prefix_inputs,
                 use_cache=True,
+                output_hidden_states=True,
             )
         prefix_pkv = root_out.past_key_values
-        self.asks.capture_root(prefix_pkv, [])
+        self.asks.capture_root(prefix_pkv, root_out.hidden_states)
         prefix_ms = (time.perf_counter() - t0) * 1000
 
         branches: List[BranchResult] = []
