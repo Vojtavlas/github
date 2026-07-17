@@ -59,21 +59,27 @@ def _agent_script(tmp_dir: str) -> Path:
     else:
         # Fallback for environments where the example file is not adjacent.
         script.write_text(
-            "import json, os, time\n"
-            "print(json.dumps({'kind':'tool_call','name':'read_file',"
-            "'args':{'path':'foo.py'}})); time.sleep(0.02)\n"
-            "if int(os.environ.get('BRANCH_ID','0')) == 0:\n"
-            "  for _ in range(3):\n"
-            "    print(json.dumps({'kind':'command','command':'pytest -q',"
-            "'output':'1 failed','exit_code':1})); time.sleep(0.02)\n"
-            "  print(json.dumps({'kind':'status','status':'stagnation'}))\n"
-            "else:\n"
-            "  print(json.dumps({'kind':'file_change','path':'foo.py',"
-            "'change_type':'modified'})); time.sleep(0.02)\n"
-            "  print(json.dumps({'kind':'test','name':'test_foo',"
-            "'passed':True,'output':''})); time.sleep(0.02)\n"
-            "  print(json.dumps({'kind':'status','status':'success',"
-            "'result':'fixed'}))\n"
+            '''import json, os, time
+def emit(event):
+    print(json.dumps(event), flush=True)
+    time.sleep(0.02)
+
+branch_id = int(os.environ.get("BRANCH_ID", "0"))
+emit({"kind": "tool_call", "name": "read_file", "args": {"path": "foo.py"}})
+
+if branch_id == 0:
+    with open("foo.py", "w") as f:
+        f.write("bad")
+    for _ in range(3):
+        emit({"kind": "command", "command": "pytest -q", "output": "1 failed", "exit_code": 1})
+    emit({"kind": "status", "status": "stagnation"})
+else:
+    with open("foo.py", "w") as f:
+        f.write("good")
+    emit({"kind": "file_change", "path": "foo.py", "change_type": "modified"})
+    emit({"kind": "test", "name": "test_foo", "passed": True, "output": ""})
+    emit({"kind": "status", "status": "success", "result": "fixed"})
+'''
         )
     return script
 

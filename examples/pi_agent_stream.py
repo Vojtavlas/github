@@ -13,9 +13,10 @@ emits JSONL events to ``stdout`` with small realistic delays:
 import json
 import os
 import time
+from typing import Any, Dict
 
 
-def emit(event: dict) -> None:
+def emit(event: Dict[str, Any]) -> None:
     print(json.dumps(event), flush=True)
     time.sleep(0.02)
 
@@ -23,7 +24,7 @@ def emit(event: dict) -> None:
 def main() -> None:
     branch_id = int(os.environ.get("BRANCH_ID", "0"))
 
-    # Tool call: read the file we are about to edit.
+    # Tool call: read the file we may edit.
     emit({"kind": "tool_call", "name": "read_file", "args": {"path": "foo.py"}})
 
     if branch_id == 0:
@@ -40,6 +41,8 @@ def main() -> None:
         emit({"kind": "status", "status": "stagnation"})
     else:
         # Change strategy and succeed.
+        with open("foo.py", "w") as f:
+            f.write("good")
         emit(
             {
                 "kind": "file_change",

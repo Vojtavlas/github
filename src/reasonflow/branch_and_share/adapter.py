@@ -8,7 +8,7 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TextIO, Union
+from typing import Any, BinaryIO, Dict, Iterator, List, Optional, TextIO, Union
 
 from .control import TrajectoryControl
 from .protocol import (
@@ -453,15 +453,15 @@ class TailPiAdapter(PiAdapter):
 
     def _iter_tail_lines(
         self,
-        stream: TextIO,
+        stream: BinaryIO,
         heartbeat: float,
         deadline: float,
-    ) -> Any:
-        """Yield new lines from ``stream`` until timeout or EOF sentinel."""
+    ) -> Iterator[str]:
+        """Yield decoded new lines from ``stream`` until timeout or EOF sentinel."""
         while time.time() < deadline:
             line = stream.readline()
             if line:
-                yield line
+                yield line.decode("utf-8", errors="replace")
                 continue
 
             try:
@@ -477,14 +477,15 @@ class TailPiAdapter(PiAdapter):
                 # New data is already available; readline will pick it up.
                 continue
             else:
-                time.sleep(heartbeat)
+                remaining = max(0.0, deadline - time.time())
+                time.sleep(min(heartbeat, remaining))
 
     def run(self, control: TrajectoryControl) -> TrajectoryOutcome:
         timeout, heartbeat = self._resolve_timeouts(control)
         deadline = time.time() + timeout
 
         try:
-            with self.path.open("r", encoding="utf-8") as stream:
+            with self.path.open("rb") as stream:
                 stream.seek(0, 2)
                 reader = EventStreamReader(
                     self._iter_tail_lines(stream, heartbeat, deadline)
