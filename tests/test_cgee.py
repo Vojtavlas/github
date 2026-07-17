@@ -244,3 +244,29 @@ def test_skip_verification_relative_gap():
     assert analyzer.should_skip_verification([0.9, 0.7]) is True
     assert analyzer.should_skip_verification([0.9, 0.85]) is False
     assert analyzer.should_skip_verification([0.5, 0.3]) is False
+
+
+def test_entropy_tracker_half_precision_is_finite():
+    tracker = EntropyTracker(torch.randn(100, 16))
+    for dtype in (torch.float16, torch.bfloat16):
+        logits = torch.tensor([[5.0, -80.0, -80.0, -80.0, -80.0]], dtype=dtype)
+        ent = tracker._entropy(logits)
+        assert torch.isfinite(ent).all()
+        assert torch.all(ent >= 0)
+
+
+def test_should_skip_verification_single_branch_does_not_skip():
+    cfg = RKSCConfig(
+        gen_conf_threshold=0.70, use_relative_gap=True, relative_gap_threshold=0.08
+    )
+    analyzer = CGEEAnalyzer(cfg, torch.randn(10, 16), 2)
+    assert analyzer.should_skip_verification([0.8]) is False
+
+
+def test_should_skip_verification_invalid_confidence_raises():
+    cfg = RKSCConfig()
+    analyzer = CGEEAnalyzer(cfg, torch.randn(10, 16), 2)
+    with pytest.raises(ValueError):
+        analyzer.should_skip_verification([-0.1])
+    with pytest.raises(ValueError):
+        analyzer.should_skip_verification([1.1])

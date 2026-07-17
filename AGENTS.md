@@ -94,7 +94,7 @@ pyproject.toml             Package metadata, dependencies, tool configs
 - **Dependencies:** `torch>=2.0`, `transformers>=4.40`, `datasets>=2.14`, `tqdm`, `numpy`, `scipy`.
 - **Dev dependencies:** `pytest>=7.0`, `black>=23.0`, `ruff>=0.1.0`, `mypy>=1.0`.
 - **Lint/format:** `ruff` and `black` use `line-length = 100` and `target-version = "py39"`. Ruff selects `E`, `F`, `W`, `I`.
-- **Type check:** `mypy` targets `python_version = "3.9"`.
+- **Type check:** `mypy` targets `python_version = "3.11"`.
 - **License:** MIT.
 - **Commit style:** Recent history uses Conventional Commits (`feat:`, `fix:`, `refactor:`, `chore:`). Prefer that style.
 
@@ -125,7 +125,7 @@ Use `ce-worktree` (preferred) or `using-git-worktrees` when starting isolated fe
 - `pytest` with tests named `test_*.py`.
 - Engine integration tests in `test_engine.py` load `Qwen/Qwen3.5-0.8B` and are skipped when `SKIP_ENGINE_TESTS=1`.
 - Prefer real code over mocks unless unavoidable.
-- The current baseline is: `ruff check src tests examples` clean; `SKIP_ENGINE_TESTS=1 py -3.11 -m pytest -q` reports `57 passed, 4 skipped`; a full run `py -3.11 -m pytest -q` reports `61 passed`.
+- The current baseline is: `ruff check src tests examples` clean; `SKIP_ENGINE_TESTS=1 py -3.11 -m pytest -q` reports `123 passed, 4 skipped`; a full run `py -3.11 -m pytest -q` reports `127 passed`.
 
 ## Skill map: what to use and when
 

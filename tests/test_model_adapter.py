@@ -1,5 +1,6 @@
 """Tests for the model introspection adapter registry."""
 
+import pytest
 import torch.nn as nn
 
 from reasonflow.model_adapter import (
@@ -62,6 +63,106 @@ def _no_layers_model():
             return iter([])
 
     return _Empty()
+
+
+def _non_modulelist_llama():
+    class _Inner:
+        layers = [1, 2, 3]
+
+    class _Wrapper:
+        model = _Inner()
+
+    return _Wrapper()
+
+
+def _non_modulelist_gpt2():
+    class _Inner:
+        h = [1, 2, 3]
+
+    class _Wrapper:
+        transformer = _Inner()
+
+    return _Wrapper()
+
+
+def _non_modulelist_gpt_neox():
+    class _Inner:
+        layers = [1, 2, 3]
+
+    class _Wrapper:
+        gpt_neox = _Inner()
+
+    return _Wrapper()
+
+
+def _empty_llama_model():
+    class _Inner:
+        layers = nn.ModuleList()
+
+    class _Wrapper:
+        model = _Inner()
+
+    return _Wrapper()
+
+
+def _empty_gpt2_model():
+    class _Inner:
+        h = nn.ModuleList()
+
+    class _Wrapper:
+        transformer = _Inner()
+
+    return _Wrapper()
+
+
+def _empty_gpt_neox_model():
+    class _Inner:
+        layers = nn.ModuleList()
+
+    class _Wrapper:
+        gpt_neox = _Inner()
+
+    return _Wrapper()
+
+
+def _heuristic_one_dot():
+    class _Wrapper:
+        layers = _make_layers()
+
+        def named_modules(self):
+            return iter([("model.layers", self.layers)])
+
+    return _Wrapper()
+
+
+def _heuristic_deep():
+    class _Wrapper:
+        layers = _make_layers()
+
+        def named_modules(self):
+            return iter([("a.b.c.layers", self.layers)])
+
+    return _Wrapper()
+
+
+def _heuristic_h():
+    class _Wrapper:
+        h = _make_layers()
+
+        def named_modules(self):
+            return iter([("transformer.h", self.h)])
+
+    return _Wrapper()
+
+
+def _heuristic_empty():
+    class _Wrapper:
+        layers = nn.ModuleList()
+
+        def named_modules(self):
+            return iter([("model.layers", self.layers)])
+
+    return _Wrapper()
 
 
 def test_llama_adapter():
@@ -144,3 +245,42 @@ def test_get_transformer_layers_raises_for_empty_model():
         assert "Could not locate transformer layers" in str(exc)
     else:
         raise AssertionError("Expected ValueError")
+
+
+def test_llama_adapter_rejects_non_modulelist():
+    assert not LlamaAdapter().matches(_non_modulelist_llama())
+
+
+def test_gpt2_adapter_rejects_non_modulelist():
+    assert not GPT2Adapter().matches(_non_modulelist_gpt2())
+
+
+def test_gpt_neox_adapter_rejects_non_modulelist():
+    assert not GPTNeoXAdapter().matches(_non_modulelist_gpt_neox())
+
+
+def test_heuristic_adapter_finds_one_dot_layers():
+    model = _heuristic_one_dot()
+    assert HeuristicAdapter().get_layers(model) == list(model.layers)
+
+
+def test_heuristic_adapter_finds_deep_layers():
+    model = _heuristic_deep()
+    assert HeuristicAdapter().get_layers(model) == list(model.layers)
+
+
+def test_heuristic_adapter_finds_h_layers():
+    model = _heuristic_h()
+    assert HeuristicAdapter().get_layers(model) == list(model.h)
+
+
+def test_empty_modulelist_raises_valueerror():
+    adapters = [
+        ("llama", LlamaAdapter(), _empty_llama_model()),
+        ("gpt2", GPT2Adapter(), _empty_gpt2_model()),
+        ("gpt_neox", GPTNeoXAdapter(), _empty_gpt_neox_model()),
+        ("heuristic", HeuristicAdapter(), _heuristic_empty()),
+    ]
+    for name, adapter, model in adapters:
+        with pytest.raises(ValueError):
+            adapter.get_layers(model)

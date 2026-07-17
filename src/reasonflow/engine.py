@@ -93,6 +93,11 @@ class MultiBranchEngine:
 
     def solve(self, problem: str) -> SolveResult:
         """RKSC-style solve: prefix sharing + CGEE-gated verification."""
+        if self.config.branching_factor <= 0:
+            raise ValueError(
+                f"branching_factor must be a positive integer, got {self.config.branching_factor}"
+            )
+        self.asks.reset()
         t0_total = time.perf_counter()
 
         # Root prefix forward: compute KV + hidden states once.
@@ -132,8 +137,12 @@ class MultiBranchEngine:
                 branch.verified = True
                 branch.early_exit_layer = exit_layer
                 verification_ms += verify_ms
+            # Ties are stable: max() returns the first maximal branch, which
+            # is the lowest branch_id because branches are generated in order.
             best = max(branches, key=lambda b: b.verification_score)
         else:
+            # Ties are stable: max() returns the first maximal branch, which
+            # is the lowest branch_id because branches are generated in order.
             best = max(branches, key=lambda b: b.generation_confidence)
 
         total_ms = (time.perf_counter() - t0_total) * 1000
@@ -149,6 +158,11 @@ class MultiBranchEngine:
 
     def baseline_solve(self, problem: str) -> SolveResult:
         """Naive baseline: generate each branch independently + full verification."""
+        if self.config.branching_factor <= 0:
+            raise ValueError(
+                f"branching_factor must be a positive integer, got {self.config.branching_factor}"
+            )
+        self.asks.reset()
         t0_total = time.perf_counter()
 
         branches: List[BranchResult] = []
@@ -167,6 +181,8 @@ class MultiBranchEngine:
             branch.early_exit_layer = exit_layer
             verification_ms += verify_ms
 
+        # Ties are stable: max() returns the first maximal branch, which
+        # is the lowest branch_id because branches are generated in order.
         best = max(branches, key=lambda b: b.verification_score)
         total_ms = (time.perf_counter() - t0_total) * 1000
         return SolveResult(

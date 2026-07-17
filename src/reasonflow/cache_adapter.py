@@ -7,6 +7,11 @@ from typing import Any
 from transformers import DynamicCache
 
 
+def _validate_batch_size(batch_size: int) -> None:
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
+
+
 class CacheAdapter(ABC):
     """Abstract base class for KV-cache cloning and expansion."""
 
@@ -28,6 +33,7 @@ class _NoneCacheAdapter(CacheAdapter):
         return None
 
     def expand(self, cache: Any, batch_size: int) -> Any:
+        _validate_batch_size(batch_size)
         return None
 
 
@@ -41,7 +47,7 @@ class DynamicCacheAdapter(CacheAdapter):
 
     def clone(self, cache: Any) -> Any:
         if hasattr(cache, "key_cache") and hasattr(cache, "value_cache"):
-            new_cache = copy.copy(cache)
+            new_cache = copy.deepcopy(cache)
             new_cache.key_cache = [
                 k.clone() if k is not None else None for k in cache.key_cache
             ]
@@ -51,12 +57,16 @@ class DynamicCacheAdapter(CacheAdapter):
             return new_cache
 
         # Fallback for newer DynamicCache implementations backed by layers.
-        new_cache = DynamicCache()
-        for layer_idx, (key_states, value_states, *_) in enumerate(cache):
-            new_cache.update(key_states.clone(), value_states.clone(), layer_idx=layer_idx)
+        new_cache = copy.deepcopy(cache)
+        for layer in new_cache.layers:
+            if hasattr(layer, "keys") and layer.keys is not None:
+                layer.keys = layer.keys.clone()
+            if hasattr(layer, "values") and layer.values is not None:
+                layer.values = layer.values.clone()
         return new_cache
 
     def expand(self, cache: Any, batch_size: int) -> Any:
+        _validate_batch_size(batch_size)
         if batch_size == 1:
             return cache
 
@@ -66,7 +76,7 @@ class DynamicCacheAdapter(CacheAdapter):
             return expanded
 
         if hasattr(cache, "key_cache") and hasattr(cache, "value_cache"):
-            expanded = copy.copy(cache)
+            expanded = copy.deepcopy(cache)
             expanded.key_cache = [
                 k.repeat_interleave(batch_size, dim=0) if k is not None else None
                 for k in cache.key_cache
@@ -91,7 +101,7 @@ class ModelSpecificCacheAdapter(CacheAdapter):
     """Adapter for model-specific cache subclasses with ``key_cache``/``value_cache``."""
 
     def clone(self, cache: Any) -> Any:
-        new_cache = copy.copy(cache)
+        new_cache = copy.deepcopy(cache)
         new_cache.key_cache = [
             k.clone() if k is not None else None for k in cache.key_cache
         ]
@@ -101,6 +111,7 @@ class ModelSpecificCacheAdapter(CacheAdapter):
         return new_cache
 
     def expand(self, cache: Any, batch_size: int) -> Any:
+        _validate_batch_size(batch_size)
         if batch_size == 1:
             return cache
 
@@ -109,7 +120,7 @@ class ModelSpecificCacheAdapter(CacheAdapter):
             expanded.batch_repeat_interleave(batch_size)
             return expanded
 
-        expanded = copy.copy(cache)
+        expanded = copy.deepcopy(cache)
         expanded.key_cache = [
             k.repeat_interleave(batch_size, dim=0) if k is not None else None
             for k in cache.key_cache
@@ -122,7 +133,11 @@ class ModelSpecificCacheAdapter(CacheAdapter):
 
 
 class IterableCacheAdapter(CacheAdapter):
-    """Adapter for older iterable cache objects with ``update`` and ``__iter__``."""
+    """Adapter for older iterable cache objects with ``update`` and ``__iter__``.
+
+    Because arbitrary iterables may not support batch expansion, ``expand``
+    returns a ``DynamicCache`` for ``batch_size > 1``.
+    """
 
     def clone(self, cache: Any) -> Any:
         new_cache = DynamicCache()
@@ -131,13 +146,9 @@ class IterableCacheAdapter(CacheAdapter):
         return new_cache
 
     def expand(self, cache: Any, batch_size: int) -> Any:
+        _validate_batch_size(batch_size)
         if batch_size == 1:
             return cache
-
-        if hasattr(cache, "batch_repeat_interleave"):
-            expanded = self.clone(cache)
-            expanded.batch_repeat_interleave(batch_size)
-            return expanded
 
         new_cache = DynamicCache()
         for layer_idx, (key_states, value_states, *_) in enumerate(cache):
@@ -156,22 +167,17 @@ class LegacyTupleCacheAdapter(CacheAdapter):
         return tuple((k.clone(), v.clone()) for k, v in cache)
 
     def expand(self, cache: Any, batch_size: int) -> Any:
+        _validate_batch_size(batch_size)
         if batch_size == 1:
             return cache
 
-        if hasattr(cache, "batch_repeat_interleave"):
-            expanded = self.clone(cache)
-            expanded.batch_repeat_interleave(batch_size)
-            return expanded
-
-        new_cache = DynamicCache()
-        for layer_idx, (key_states, value_states, *_) in enumerate(cache):
-            new_cache.update(
+        return tuple(
+            (
                 key_states.repeat_interleave(batch_size, dim=0),
                 value_states.repeat_interleave(batch_size, dim=0),
-                layer_idx=layer_idx,
             )
-        return new_cache
+            for key_states, value_states in cache
+        )
 
 
 _none_adapter = _NoneCacheAdapter()

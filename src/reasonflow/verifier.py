@@ -30,20 +30,34 @@ class Verifier:
             "Is this answer correct? Answer YES or NO."
         )
 
+    def _verifier_token_ids(self, variants):
+        """Collect all token IDs produced by a set of string variants."""
+        ids = set()
+        for text in variants:
+            encoded = self.tokenizer.encode(text, add_special_tokens=False)
+            if encoded:
+                ids.update(encoded)
+        return ids
+
     def _verifier_score(self, logits: torch.Tensor) -> float:
         """Score a verifier prompt, returning a probability-like value."""
-        yes_ids = self.tokenizer.encode("YES", add_special_tokens=False)
-        no_ids = self.tokenizer.encode("NO", add_special_tokens=False)
-        yes_id = yes_ids[0] if yes_ids else None
-        no_id = no_ids[0] if no_ids else None
+        if logits.ndim > 1:
+            logits = logits[0]
+
+        yes_ids = self._verifier_token_ids(
+            ["YES", "Yes", "yes", " YES", " Yes", " yes"]
+        )
+        no_ids = self._verifier_token_ids(
+            ["NO", "No", "no", " NO", " No", " no"]
+        )
+
+        if not yes_ids and not no_ids:
+            return 0.5
+
         probs = torch.softmax(logits, dim=-1)
-        if yes_id is not None and no_id is not None:
-            yes_prob = probs[yes_id].item()
-            no_prob = probs[no_id].item()
-            return yes_prob / (yes_prob + no_prob + 1e-10)
-        if yes_id is not None:
-            return probs[yes_id].item()
-        return 0.5
+        yes_mass = probs[list(yes_ids)].sum().item() if yes_ids else 0.0
+        no_mass = probs[list(no_ids)].sum().item() if no_ids else 0.0
+        return yes_mass / (yes_mass + no_mass + 1e-10)
 
     def _tokenize(self, text: str) -> dict:
         return self.tokenizer(

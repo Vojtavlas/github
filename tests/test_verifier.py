@@ -24,14 +24,14 @@ def _make_tokenizer():
     }
     tok = MagicMock()
     tok.return_value = batch
-    tok.encode = lambda text, **kwargs: {"YES": [1], "NO": [2]}[text]
+    tok.encode = lambda text, **kwargs: {"YES": [1], "NO": [2]}.get(text, [])
     return tok
 
 
 def test_verifier_score_ratio():
     cfg = _config()
     tokenizer = MagicMock()
-    tokenizer.encode = lambda text, **kwargs: [1] if text == "YES" else [2]
+    tokenizer.encode = lambda text, **kwargs: {"YES": [1], "NO": [2]}.get(text, [])
     cgee = MagicMock()
     model = MagicMock()
     verifier = Verifier(model, tokenizer, cgee, cfg, device="cpu")
@@ -41,6 +41,71 @@ def test_verifier_score_ratio():
 
     probs = torch.softmax(logits, dim=-1)
     expected = probs[1].item() / (probs[1].item() + probs[2].item() + 1e-10)
+    assert score == pytest.approx(expected)
+
+
+def test_verifier_score_multi_token():
+    """A tokenizer may split YES/NO into several subtokens; all should be summed."""
+    cfg = _config()
+    tokenizer = MagicMock()
+    tokenizer.encode = lambda text, **kwargs: {"YES": [3, 4], "NO": [5]}.get(text, [])
+    verifier = Verifier(None, tokenizer, None, cfg, device="cpu")
+
+    logits = torch.zeros(10)
+    logits[3] = 1.0
+    logits[4] = 5.0
+    logits[5] = 2.0
+    probs = torch.softmax(logits, dim=-1)
+    expected = (probs[3] + probs[4]) / (probs[3] + probs[4] + probs[5])
+
+    score = verifier._verifier_score(logits)
+    assert score == pytest.approx(expected.item())
+
+
+def test_verifier_score_missing_tokens():
+    """If no YES/NO ids are present in the vocabulary, score should be neutral."""
+    cfg = _config()
+    tokenizer = MagicMock()
+    tokenizer.encode = lambda text, **kwargs: []
+    verifier = Verifier(None, tokenizer, None, cfg, device="cpu")
+
+    logits = torch.randn(10)
+    score = verifier._verifier_score(logits)
+    assert score == pytest.approx(0.5)
+
+
+def test_verifier_score_case_variants():
+    """Lowercase, title-case and leading-space variants should contribute mass."""
+    cfg = _config()
+    tokenizer = MagicMock()
+    tokenizer.encode = lambda text, **kwargs: {" yes": [6], " no": [7]}.get(text, [])
+    verifier = Verifier(None, tokenizer, None, cfg, device="cpu")
+
+    logits = torch.zeros(10)
+    logits[6] = 5.0
+    logits[7] = 1.0
+    probs = torch.softmax(logits, dim=-1)
+    expected = probs[6] / (probs[6] + probs[7])
+
+    score = verifier._verifier_score(logits)
+    assert score == pytest.approx(expected.item())
+
+
+def test_verifier_score_2d_logits():
+    """A 2-D (batch, vocab) logits tensor should be handled by taking row 0."""
+    cfg = _config()
+    tokenizer = MagicMock()
+    tokenizer.encode = lambda text, **kwargs: {"YES": [3, 4], "NO": [5]}.get(text, [])
+    verifier = Verifier(None, tokenizer, None, cfg, device="cpu")
+
+    logits_1d = torch.zeros(10)
+    logits_1d[3] = 1.0
+    logits_1d[4] = 5.0
+    logits_1d[5] = 2.0
+    logits_2d = logits_1d.unsqueeze(0)
+
+    expected = verifier._verifier_score(logits_1d)
+    score = verifier._verifier_score(logits_2d)
     assert score == pytest.approx(expected)
 
 

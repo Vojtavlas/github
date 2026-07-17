@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock
 
+import pytest
 import torch
 
 from reasonflow.config import EngineConfig
@@ -109,3 +110,40 @@ def test_continue_generate_stops_at_eos():
 
     assert generated_ids.shape == (1, 2)
     assert sampler.sample.call_count == 2
+
+
+def test_decode_rejects_batch_size_not_one():
+    cfg = _config(max_new_tokens=2)
+    tokenizer = MagicMock()
+    tokenizer.eos_token_id = 99
+
+    sampler = MagicMock()
+    model = MagicMock()
+
+    decoder = Decoder(model, tokenizer, sampler, cfg)
+    first_ids = torch.tensor([[1, 2], [3, 4]])
+    mask = torch.tensor([[1, 1], [1, 1]])
+
+    with pytest.raises(ValueError, match="batch_size == 1"):
+        decoder.decode(first_ids, None, mask, max_new_tokens=2)
+
+    assert sampler.sample.call_count == 0
+    assert model.call_count == 0
+
+
+def test_continue_generate_rejects_batch_size_not_one():
+    cfg = _config(max_new_tokens=2)
+    tokenizer = MagicMock()
+    tokenizer.eos_token_id = 99
+
+    sampler = MagicMock()
+    model = MagicMock()
+
+    decoder = Decoder(model, tokenizer, sampler, cfg)
+    first_logits = torch.randn(2, 10)
+
+    with pytest.raises(ValueError, match="batch_size == 1"):
+        decoder.continue_generate(first_logits, MagicMock(), torch.tensor([[1, 1]]), 2)
+
+    assert sampler.sample.call_count == 0
+    assert model.call_count == 0

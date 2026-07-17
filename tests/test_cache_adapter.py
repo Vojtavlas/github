@@ -1,5 +1,6 @@
 """Tests for reasonflow.cache_adapter."""
 
+import pytest
 import torch
 from transformers import DynamicCache
 
@@ -168,9 +169,14 @@ def test_legacy_tuple_cache_clone_and_expand():
     _assert_cache_equal(cache, cloned)
 
     expanded = expand_kv(cache, 3)
-    assert isinstance(expanded, DynamicCache)
-    for key, _ in _cache_pairs(expanded):
+    assert isinstance(expanded, tuple)
+    assert expanded is not cache
+    for (key, value), (orig_key, orig_value) in zip(expanded, cache):
         assert key.shape[0] == 3
+        assert value.shape[0] == 3
+        assert torch.equal(key[0], orig_key[0])
+        assert torch.equal(value[0], orig_value[0])
+        assert torch.equal(key[0], key[1]) and torch.equal(key[1], key[2])
 
     assert expand_kv(cache, 1) is cache
 
@@ -199,3 +205,49 @@ def test_factory_prefers_dynamic_over_iterable():
     # DynamicCacheAdapter first.
     cache = DynamicCache()
     assert isinstance(get_cache_adapter(cache), DynamicCacheAdapter)
+
+
+def test_expand_invalid_batch_size():
+    for batch_size in (0, -1):
+        with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+            expand_kv(None, batch_size)
+
+    tup = ((_make_tensors()[0], _make_tensors()[1]),)
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        expand_kv(tup, 0)
+
+    it_cache = IterableCache([_make_tensors()])
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        expand_kv(it_cache, -2)
+
+    dc = DynamicCache()
+    k, v = _make_tensors()
+    dc.update(k, v, layer_idx=0)
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        expand_kv(dc, 0)
+
+    model_cache = FakeModelCache([_make_tensors()])
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        expand_kv(model_cache, -1)
+
+
+def test_clone_does_not_share_mutable_attributes():
+    # Model-specific cache: non-tensor mutable attributes should not be shared.
+    cache = FakeModelCache([_make_tensors(), _make_tensors(seq_len=5)])
+    cache.extra = {"shared": [1, 2, 3]}
+    cloned = clone_kv_cache(cache)
+    assert cloned.extra is not cache.extra
+    cloned.extra["shared"].append(4)
+    assert cache.extra["shared"] == [1, 2, 3]
+
+    # DynamicCache: additional mutable attributes should not be shared.
+    dc = DynamicCache()
+    for i in range(2):
+        k, v = _make_tensors(seq_len=2 + i)
+        dc.update(k, v, layer_idx=i)
+    dc.some_meta = ["a", "b"]
+    dc2 = DynamicCacheAdapter().clone(dc)
+    assert dc2.some_meta is not dc.some_meta
+    dc2.some_meta.append("c")
+    assert dc.some_meta == ["a", "b"]
+
