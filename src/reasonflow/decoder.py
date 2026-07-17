@@ -132,3 +132,115 @@ class Decoder:
         generated_ids = torch.stack(generated, dim=1)
         mean_conf = torch.stack(confidences).mean().item()
         return generated_ids, mean_conf, pkv
+
+    def decode_batch(
+        self,
+        first_logits: torch.Tensor,
+        past_key_values,
+        attention_mask: torch.Tensor,
+        max_new_tokens: int,
+        seq_lens: List[int],
+    ) -> Tuple[List[torch.Tensor], List[float]]:
+        """Batched autoregressive decode where each row can finish independently.
+
+        Parameters
+        ----------
+        first_logits:
+            Logits for the first token to sample, shape ``[B, vocab]`` or
+            ``[B, 1, vocab]``.
+        past_key_values:
+            KV cache already prefilled for each batch row.
+        attention_mask:
+            Preallocated mask of shape ``[B, init_len + max_new_tokens]`` where
+            ``init_len = attention_mask.size(1) - max_new_tokens``. The initial
+            ``init_len`` columns encode the prefix + suffix; generation columns
+            start at index ``init_len``.
+        max_new_tokens:
+            Maximum number of new tokens to generate per row.
+        seq_lens:
+            Real sequence length (prefix + suffix) for each row, used to set
+            absolute position ids during generation.
+
+        Returns
+        -------
+        A list of generated token-id tensors (one 1-D tensor per row) and a list
+        of per-row mean confidences.
+        """
+        if first_logits.dim() == 3:
+            first_logits = first_logits[:, -1, :]
+
+        batch_size = first_logits.size(0)
+        device = first_logits.device
+        init_len = attention_mask.size(1) - max_new_tokens
+        eos_id = self.tokenizer.eos_token_id
+        pad_id = self.tokenizer.pad_token_id
+        if pad_id is None:
+            pad_id = 1
+
+        active = [True] * batch_size
+        generated: List[List[torch.Tensor]] = [[] for _ in range(batch_size)]
+        confidences: List[List[torch.Tensor]] = [[] for _ in range(batch_size)]
+
+        next_tokens, next_confs = self.sampler.sample(first_logits)
+        current_ids = torch.full((batch_size, 1), pad_id, dtype=torch.long, device=device)
+
+        for b in range(batch_size):
+            generated[b].append(next_tokens[b])
+            confidences[b].append(next_confs[b])
+            if next_tokens[b].item() == eos_id:
+                active[b] = False
+            else:
+                current_ids[b, 0] = next_tokens[b]
+
+        if max_new_tokens > 1 and any(active):
+            for step in range(1, max_new_tokens):
+                if not any(active):
+                    break
+
+                active_indices = [i for i, a in enumerate(active) if a]
+                new_col = init_len + step - 1
+                attention_mask[active_indices, new_col] = 1
+
+                position_ids = torch.zeros(batch_size, dtype=torch.long, device=device)
+                position_ids[active_indices] = torch.tensor(
+                    [seq_lens[b] + step - 1 for b in active_indices],
+                    dtype=torch.long,
+                    device=device,
+                )
+
+                with torch.inference_mode():
+                    out = self.model(
+                        input_ids=current_ids,
+                        attention_mask=attention_mask[:, : init_len + step],
+                        past_key_values=past_key_values,
+                        position_ids=position_ids.unsqueeze(1),
+                        use_cache=True,
+                    )
+
+                logits = out.logits[:, -1, :]
+                new_tokens, new_confs = self.sampler.sample(logits)
+                past_key_values = out.past_key_values
+
+                for b in range(batch_size):
+                    if active[b]:
+                        generated[b].append(new_tokens[b])
+                        confidences[b].append(new_confs[b])
+                        if new_tokens[b].item() == eos_id:
+                            active[b] = False
+                            current_ids[b, 0] = pad_id
+                        else:
+                            current_ids[b, 0] = new_tokens[b]
+                    else:
+                        current_ids[b, 0] = pad_id
+
+        sequences: List[torch.Tensor] = []
+        mean_confidences: List[float] = []
+        for g, c in zip(generated, confidences):
+            if g:
+                sequences.append(torch.stack(g, dim=0))
+                mean_confidences.append(torch.stack(c).mean().item())
+            else:
+                sequences.append(torch.empty(0, dtype=torch.long, device=device))
+                mean_confidences.append(0.0)
+
+        return sequences, mean_confidences
