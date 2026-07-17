@@ -180,7 +180,7 @@ Use `ce-worktree` (preferred) or `using-git-worktrees` when starting isolated fe
 - `pytest` with tests named `test_*.py`.
 - Engine integration tests in `test_engine.py` load `Qwen/Qwen3.5-0.8B` and are skipped when `SKIP_ENGINE_TESTS=1`.
 - Prefer real code over mocks unless unavoidable.
-The current baseline is: `ruff check src tests examples` clean; `SKIP_ENGINE_TESTS=1 py -3.11 -m pytest -q` reports `255 passed, 4 skipped`; a full run `py -3.11 -m pytest -q` reports `254 passed, 5 skipped`.
+The current baseline is: `ruff check src tests examples` clean; `SKIP_ENGINE_TESTS=1 py -3.11 -m pytest -q` reports `263 passed, 4 skipped`; a full run `py -3.11 -m pytest -q` reports `262 passed, 5 skipped`.
 
 ## Benchmark conventions
 

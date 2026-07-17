@@ -4,9 +4,12 @@ import csv
 import json
 import math
 import re
+import time
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from typing import Any, List, Optional, Protocol, Tuple
+
+import torch
 
 
 @dataclass
@@ -325,50 +328,56 @@ class Evaluator:
     def _extract(self, text: str) -> str:
         return self.extractor.extract(text)
 
-    def _timed(self, problem: str, idx: int, mode: str) -> Tuple[str, float]:
-        """Run ``mode`` (``solve`` or ``baseline_solve``) with warmup + repeats.
-
-        Returns a representative answer string and the mean reported time in ms.
-        """
-        import torch
-
-        method = getattr(self.engine, mode)
-        warmup = max(0, self.config.warmup)
-        runs = max(1, self.config.runs)
-
-        # Warmup runs are discarded.
-        for w in range(warmup):
-            torch.manual_seed(self.config.seed + idx * 1000 + w)
-            method(problem)
-
-        times: List[float] = []
-        texts: List[str] = []
-        for r in range(runs):
-            torch.manual_seed(self.config.seed + idx * 1000 + warmup + r)
-            result = method(problem)
-            times.append(float(getattr(result, "total_time_ms", 0.0)))
-            texts.append(getattr(result, "best_text", ""))
-
-        # For temperature=0 all texts should agree; use the last one.
-        return texts[-1], sum(times) / len(times)
+    def _call_and_time(self, method, problem: str, seed_value: int) -> Tuple[str, float]:
+        torch.manual_seed(seed_value)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        result = method(problem)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        t1 = time.perf_counter()
+        text = getattr(result, "best_text", "")
+        return text, (t1 - t0) * 1000.0
 
     def _run_pair(
         self, problem: str, idx: int
     ) -> Tuple[Optional[str], Optional[float], Optional[str], Optional[float], Optional[str]]:
-        """Run RKSC and baseline with alternating order to reduce cache bias.
+        warmup = max(0, self.config.warmup)
+        runs = max(1, self.config.runs)
+        solve = self.engine.solve
+        baseline_solve = self.engine.baseline_solve
+        base_seed = self.config.seed + idx * 1000
 
-        Returns (rksc_text, rksc_ms, baseline_text, baseline_ms, error).
-        """
-        order = "rksc_first" if idx % 2 == 0 else "baseline_first"
         try:
-            if order == "rksc_first":
-                rksc_text, rksc_ms = self._timed(problem, idx, "solve")
-                baseline_text, baseline_ms = self._timed(problem, idx, "baseline_solve")
-            else:
-                baseline_text, baseline_ms = self._timed(problem, idx, "baseline_solve")
-                rksc_text, rksc_ms = self._timed(problem, idx, "solve")
+            for w in range(warmup):
+                torch.manual_seed(base_seed + w)
+                solve(problem)
+                torch.manual_seed(base_seed + warmup + w)
+                baseline_solve(problem)
+
+            rksc_times: List[float] = []
+            baseline_times: List[float] = []
+            rksc_text = ""
+            baseline_text = ""
+            for r in range(runs):
+                rksc_seed = base_seed + 2 * warmup + r
+                baseline_seed = base_seed + 2 * warmup + runs + r
+                if (idx + r) % 2 == 0:
+                    rksc_text, ms = self._call_and_time(solve, problem, rksc_seed)
+                    rksc_times.append(ms)
+                    baseline_text, ms = self._call_and_time(baseline_solve, problem, baseline_seed)
+                    baseline_times.append(ms)
+                else:
+                    baseline_text, ms = self._call_and_time(baseline_solve, problem, baseline_seed)
+                    baseline_times.append(ms)
+                    rksc_text, ms = self._call_and_time(solve, problem, rksc_seed)
+                    rksc_times.append(ms)
         except Exception as exc:
             return None, None, None, None, str(exc)
+
+        rksc_ms = sum(rksc_times) / len(rksc_times) if rksc_times else None
+        baseline_ms = sum(baseline_times) / len(baseline_times) if baseline_times else None
         return rksc_text, rksc_ms, baseline_text, baseline_ms, None
 
     def run(self, dataset: Dataset) -> EvalReport:

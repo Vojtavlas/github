@@ -223,35 +223,91 @@ def test_eval_report_save_json(tmp_path):
 
 
 def test_evaluator_runs_offline():
+    clock = [0.0]
+    answers = {"2+2?": "#### 4", "3+3?": "#### 6"}
+
+    def fake_perf_counter():
+        return clock[0]
+
+    def make_method(name, increment):
+        def method(problem):
+            clock[0] += increment
+            result = MagicMock()
+            result.best_text = answers[problem]
+            return result
+
+        return method
+
     engine = MagicMock()
-
-    def _make_result(text, ms):
-        r = MagicMock()
-        r.best_text = text
-        r.total_time_ms = ms
-        return r
-
-    engine.solve.side_effect = [
-        _make_result("#### 4", 100.0),
-        _make_result("#### 6", 100.0),
-    ]
-    engine.baseline_solve.side_effect = [
-        _make_result("#### 4", 120.0),
-        _make_result("#### 6", 120.0),
-    ]
+    engine.solve.side_effect = make_method("solve", 0.100)
+    engine.baseline_solve.side_effect = make_method("baseline", 0.120)
 
     cfg = EvalConfig(max_problems=2, metric="exact_match", warmup=0, runs=1)
     evaluator = Evaluator(engine, cfg)
     dataset = InMemoryDataset(
         [("1", "2+2?", "4"), ("2", "3+3?", "6")]
     )
-    report = evaluator.run(dataset)
+
+    with patch("reasonflow.eval.time.perf_counter", fake_perf_counter):
+        report = evaluator.run(dataset)
 
     assert report.accuracy == 1.0
     assert report.baseline_accuracy == 1.0
     assert report.speedup == 240.0 / 200.0
     assert engine.solve.call_count == 2
     assert engine.baseline_solve.call_count == 2
+
+
+def test_evaluator_benchmark_timing_and_order():
+    clock = [0.0]
+    call_log = []
+
+    def fake_perf_counter():
+        return clock[0]
+
+    def make_method(name, increment):
+        def method(problem):
+            call_log.append((name, problem))
+            clock[0] += increment
+            result = MagicMock()
+            result.best_text = "#### 4"
+            return result
+
+        return method
+
+    engine = MagicMock()
+    engine.solve.side_effect = make_method("solve", 0.005)
+    engine.baseline_solve.side_effect = make_method("baseline", 0.010)
+
+    cfg = EvalConfig(
+        max_problems=2,
+        metric="exact_match",
+        warmup=1,
+        runs=2,
+        extract_gold=False,
+    )
+    evaluator = Evaluator(engine, cfg)
+    dataset = InMemoryDataset(
+        [("p0", "problem 0", "4"), ("p1", "problem 1", "4")]
+    )
+
+    with patch("reasonflow.eval.time.perf_counter", fake_perf_counter):
+        report = evaluator.run(dataset)
+
+    assert report.accuracy == 1.0
+    assert report.baseline_accuracy == 1.0
+    assert report.speedup == pytest.approx(2.0)
+    assert report.rksc_ms == pytest.approx(10.0)
+    assert report.baseline_ms == pytest.approx(20.0)
+    assert report.results[0].rksc_ms == pytest.approx(5.0)
+    assert report.results[0].baseline_ms == pytest.approx(10.0)
+    assert sum(1 for n, _ in call_log if n == "solve") == 6
+    assert sum(1 for n, _ in call_log if n == "baseline") == 6
+
+    p0_names = [n for n, p in call_log if p == "problem 0"]
+    p1_names = [n for n, p in call_log if p == "problem 1"]
+    assert p0_names == ["solve", "baseline", "solve", "baseline", "baseline", "solve"]
+    assert p1_names == ["solve", "baseline", "baseline", "solve", "solve", "baseline"]
 
 
 def test_evaluator_extracts_gold_from_gsm8k_format():

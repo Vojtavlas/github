@@ -38,3 +38,7 @@ Thumbs.db
 
 # Agent scratch / OMO plans
 .omo/
+
+# Evaluator demo output artifacts
+eval_report.json
+eval_report.csv
