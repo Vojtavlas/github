@@ -32,3 +32,6 @@ checkpoints/
 # OS
 .DS_Store
 Thumbs.db
+
+# Agent worktrees
+.worktrees/
