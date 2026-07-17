@@ -1,6 +1,6 @@
 """Generate a single reasoning branch, with ASKS gating and baseline fallback."""
 
-from typing import Callable, Optional
+from typing import Callable, Dict, Optional, cast
 
 import torch
 
@@ -52,14 +52,17 @@ class BranchGenerator:
     def _default_branch_hint(branch_id: int) -> str:
         return f"Approach {branch_id + 1}: think step by step."
 
-    def _tokenize(self, text: str, add_special_tokens: bool = True) -> dict:
-        return self.tokenizer(
-            text,
-            return_tensors="pt",
-            add_special_tokens=add_special_tokens,
-            truncation=True,
-            max_length=self.config.max_seq_len,
-        ).to(self.device)
+    def _tokenize(self, text: str, add_special_tokens: bool = True) -> Dict[str, torch.Tensor]:
+        return cast(
+            Dict[str, torch.Tensor],
+            self.tokenizer(
+                text,
+                return_tensors="pt",
+                add_special_tokens=add_special_tokens,
+                truncation=True,
+                max_length=self.config.max_seq_len,
+            ).to(self.device),
+        )
 
     def _generate_baseline_branch(self, problem: str, branch_id: int) -> BranchResult:
         """Generate one branch from scratch (no prefix KV sharing)."""

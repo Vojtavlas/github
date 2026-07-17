@@ -1,6 +1,6 @@
 """Small helpers shared across ReasonFlow modules."""
 
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -12,7 +12,7 @@ def load_model_and_tokenizer(
     attn_impl: str = "sdpa",
 ) -> tuple:
     """Load a causal LM and its tokenizer with sensible defaults."""
-    tok = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    tok: Any = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     if tok.pad_token is None:
         if tok.eos_token is not None:
             tok.pad_token = tok.eos_token
@@ -38,9 +38,9 @@ def load_model_and_tokenizer(
     else:
         kwargs["low_cpu_mem_usage"] = True
 
-    model = AutoModelForCausalLM.from_pretrained(model_id, **kwargs)
+    model: Any = AutoModelForCausalLM.from_pretrained(model_id, **kwargs)
     if not kwargs.get("device_map"):
-        model = model.to(device)
+        model = model.to(device_str)
     model.eval()
     return model, tok
 

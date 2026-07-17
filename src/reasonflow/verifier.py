@@ -1,7 +1,7 @@
 """Confidence-gated verification of a proposed answer."""
 
 import time
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple, cast
 
 import torch
 
@@ -59,14 +59,17 @@ class Verifier:
         no_mass = probs[list(no_ids)].sum().item() if no_ids else 0.0
         return yes_mass / (yes_mass + no_mass + 1e-10)
 
-    def _tokenize(self, text: str) -> dict:
-        return self.tokenizer(
-            text,
-            return_tensors="pt",
-            add_special_tokens=True,
-            truncation=True,
-            max_length=self.config.max_seq_len,
-        ).to(self.device)
+    def _tokenize(self, text: str) -> Dict[str, torch.Tensor]:
+        return cast(
+            Dict[str, torch.Tensor],
+            self.tokenizer(
+                text,
+                return_tensors="pt",
+                add_special_tokens=True,
+                truncation=True,
+                max_length=self.config.max_seq_len,
+            ).to(self.device),
+        )
 
     def verify(self, problem: str, answer: str) -> Tuple[float, Optional[int], float]:
         """Verify an answer and return (score, exit_layer, verify_ms)."""

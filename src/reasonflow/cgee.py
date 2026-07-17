@@ -5,6 +5,7 @@ from typing import List, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
+from .config import RKSCConfig
 from .model_adapter import get_transformer_layers
 
 
@@ -59,7 +60,7 @@ class EntropyTracker:
 class EarlyExitStrategy:
     """Decide whether the transformer should exit early at a given layer."""
 
-    def __init__(self, cfg):
+    def __init__(self, cfg: RKSCConfig) -> None:
         self.cfg = cfg
 
     def should_exit(self, layer_idx: int, current_entropy: float, curve: List[float]) -> bool:
@@ -129,7 +130,7 @@ class CGEEAnalyzer:
       stack once the per-layer output entropy becomes low and stable.
     """
 
-    def __init__(self, cfg, unembed_weight: torch.Tensor, n_layers: int):
+    def __init__(self, cfg: RKSCConfig, unembed_weight: torch.Tensor, n_layers: int):
         self.cfg = cfg
         self.unembed = unembed_weight.float()
         self.n_layers = n_layers

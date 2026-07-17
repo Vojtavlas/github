@@ -4,6 +4,8 @@ import math
 from dataclasses import dataclass
 from typing import Dict
 
+from .config import RSBCMConfig
+
 
 class RSBCMManager:
     """Evicts KV blocks by a score/depth priority for deep tree searches."""
@@ -19,7 +21,7 @@ class RSBCMManager:
         def priority(self) -> float:
             return self.importance / (self.tree_depth + 1)
 
-    def __init__(self, cfg):
+    def __init__(self, cfg: RSBCMConfig) -> None:
         if cfg.max_blocks < 0:
             raise ValueError(f"max_blocks must be non-negative, got {cfg.max_blocks}")
         self.cfg = cfg

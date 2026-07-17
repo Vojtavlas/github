@@ -1,7 +1,7 @@
 """End-to-end multi-branch reasoning engine."""
 
 import time
-from typing import List
+from typing import Dict, List, Optional, cast
 
 import torch
 
@@ -46,7 +46,7 @@ class MultiBranchEngine:
     using CGEE to avoid unnecessary verification work.
     """
 
-    def __init__(self, model, tokenizer, config: EngineConfig = None):
+    def __init__(self, model, tokenizer, config: Optional[EngineConfig] = None):
         self.model = model
         self.tokenizer = tokenizer
         self.config = config or EngineConfig()
@@ -82,14 +82,17 @@ class MultiBranchEngine:
     def _branch_hint(self, branch_id: int) -> str:
         return _branch_hint(branch_id, self.hints)
 
-    def _tokenize(self, text: str, add_special_tokens: bool = True) -> dict:
-        return self.tokenizer(
-            text,
-            return_tensors="pt",
-            add_special_tokens=add_special_tokens,
-            truncation=True,
-            max_length=self.config.max_seq_len,
-        ).to(self.device)
+    def _tokenize(self, text: str, add_special_tokens: bool = True) -> Dict[str, torch.Tensor]:
+        return cast(
+            Dict[str, torch.Tensor],
+            self.tokenizer(
+                text,
+                return_tensors="pt",
+                add_special_tokens=add_special_tokens,
+                truncation=True,
+                max_length=self.config.max_seq_len,
+            ).to(self.device),
+        )
 
     def solve(self, problem: str) -> SolveResult:
         """RKSC-style solve: prefix sharing + CGEE-gated verification."""

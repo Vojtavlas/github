@@ -1,10 +1,11 @@
 """Attention-Similarity KV Sharing (ASKS)."""
 
 import abc
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, cast
 
 import torch
 
+from .config import RKSCConfig
 from .utils import squeeze_hidden
 
 
@@ -35,7 +36,7 @@ class CosineSimilarity(SimilarityMetric):
         b_norms = branch.norm(dim=-1, keepdim=True).clamp_min(1e-8)
         b_unit = branch / b_norms
         cos = (root_hidden.to(dev) * b_unit).sum(-1)
-        return cos
+        return cast(torch.Tensor, cos)
 
 
 class EuclideanSimilarity(SimilarityMetric):
@@ -103,7 +104,7 @@ class ASKSManager:
 
     def __init__(
         self,
-        cfg,
+        cfg: RKSCConfig,
         arch: dict,
         metric: Optional[SimilarityMetric] = None,
         weighting: Optional[WeightingStrategy] = None,

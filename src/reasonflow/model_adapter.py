@@ -1,12 +1,12 @@
 """Model introspection adapters for locating transformer decoder layers."""
 
 from abc import ABC, abstractmethod
-from typing import List
+from typing import Iterable, List
 
 import torch.nn as nn
 
 
-def _ensure_non_empty(layers):
+def _ensure_non_empty(layers: Iterable[nn.Module]) -> List[nn.Module]:
     """Validate and return a non-empty list of transformer layers."""
     if not layers:
         raise ValueError("Transformer layers list is empty")
