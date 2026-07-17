@@ -41,6 +41,7 @@ class BranchAndShareConfig:
 
     max_branches: int = 3
     stagnation: StagnationConfig = field(default_factory=StagnationConfig)
+    max_history: int = 1000
     base_branch: str = "main"
     worktrees_dir: str = ".worktrees"
     use_git_worktrees: bool = True
@@ -49,8 +50,10 @@ class BranchAndShareConfig:
     heartbeat_interval: float = 0.05
 
     def __post_init__(self) -> None:
-        if self.max_branches <= 0:
-            raise ValueError("max_branches must be > 0")
+        if self.max_history < 0:
+            raise ValueError("max_history must be >= 0")
+        if self.max_branches < 0:
+            raise ValueError("max_branches must be >= 0")
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be > 0")
         if self.heartbeat_interval <= 0:

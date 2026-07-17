@@ -189,8 +189,14 @@ class FileStreamPiAdapter(PiAdapter):
 
     def run(self, control: TrajectoryControl) -> TrajectoryOutcome:
         if isinstance(self.source, (str, Path)):
-            with Path(self.source).open("r", encoding="utf-8") as stream:
-                return self._run_stream(stream, control)
+            try:
+                with Path(self.source).open("r", encoding="utf-8") as stream:
+                    return self._run_stream(stream, control)
+            except FileNotFoundError as exc:
+                return TrajectoryOutcome(
+                    status=TrajectoryStatus.ERROR,
+                    error=f"Event log not found: {self.source} ({exc})",
+                )
         return self._run_stream(self.source, control)
 
     def _run_stream(self, stream: TextIO, control: TrajectoryControl) -> TrajectoryOutcome:
@@ -254,11 +260,18 @@ class SubprocessPiAdapter(PiAdapter):
             environment["BRANCH_WORKTREE"] = str(self.context.worktree_path)
         return environment
 
-    def _stream_lines(self, stdout: TextIO, q: "queue.Queue[Optional[str]]") -> None:
+    def _stream_lines(
+        self, stdout: TextIO, q: "queue.Queue[Union[str, Exception, None]]"
+    ) -> None:
         """Read lines from ``stdout`` and push them onto ``q``."""
         try:
-            for line in iter(stdout.readline, ""):
+            while True:
+                line = stdout.readline()
+                if line == "":
+                    break
                 q.put(line)
+        except Exception as exc:
+            q.put(exc)
         finally:
             q.put(None)
 
@@ -293,7 +306,7 @@ class SubprocessPiAdapter(PiAdapter):
             if process.stdout is None:
                 raise RuntimeError("Subprocess stdout is not available")
 
-            q: "queue.Queue[Optional[str]]" = queue.Queue()
+            q: "queue.Queue[Union[str, Exception, None]]" = queue.Queue()
             reader_thread = threading.Thread(
                 target=self._stream_lines,
                 args=(process.stdout, q),
@@ -325,6 +338,19 @@ class SubprocessPiAdapter(PiAdapter):
                 if line is None:
                     break
 
+                if isinstance(line, Exception):
+                    if isinstance(line, UnicodeDecodeError):
+                        outcome = TrajectoryOutcome(
+                            status=TrajectoryStatus.ERROR,
+                            error=f"Subprocess produced non-UTF-8 (binary) output: {line}",
+                        )
+                    else:
+                        outcome = TrajectoryOutcome(
+                            status=TrajectoryStatus.ERROR,
+                            error=f"Error reading subprocess output: {line}",
+                        )
+                    break
+
                 line_no += 1
                 text = line.rstrip("\r\n")
                 if not text.strip():
@@ -335,7 +361,7 @@ class SubprocessPiAdapter(PiAdapter):
                 except json.JSONDecodeError as exc:
                     outcome = TrajectoryOutcome(
                         status=TrajectoryStatus.ERROR,
-                        error=f"Invalid JSON from subprocess: {exc}",
+                        error=f"Invalid JSON from subprocess line {line_no}: {exc}",
                     )
                     break
 

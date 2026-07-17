@@ -9,8 +9,15 @@ from .control import TrajectoryControl
 from .detector import StagnationDetector
 from .metrics import MetricsTracker
 from .monitor import TrajectoryMonitor
-from .results import BranchContext, ExperiencePacket, TrajectoryOutcome
+from .results import (
+    BranchContext,
+    ExperiencePacket,
+    TrajectoryOutcome,
+    TrajectoryStatus,
+)
 from .store import ExperienceStore
+
+_FAILED_WORKTREE = "<branch-creation-failed>"
 
 
 class BranchSessionLauncher:
@@ -51,9 +58,34 @@ class BranchSessionLauncher:
             else:
                 start_point = BranchStartPoint.ORIGINAL
 
-        context = self.branch_manager.create_branch(
-            parent, start_point, last_packet, branch_id
-        )
+        try:
+            context = self.branch_manager.create_branch(
+                parent, start_point, last_packet, branch_id
+            )
+        except Exception as exc:
+            context = BranchContext(
+                branch_id=branch_id,
+                worktree_path=_FAILED_WORKTREE,
+                start_ref="",
+                start_commit="",
+                summary=f"create_branch failed: {exc}",
+                base_branch=self.config.base_branch,
+                parent_branch_id=parent.branch_id if parent else None,
+            )
+            monitor = TrajectoryMonitor(git_repo_root=_FAILED_WORKTREE)
+            detector = StagnationDetector(self.config.stagnation)
+            metrics = MetricsTracker()
+            control = TrajectoryControl(monitor, detector, metrics, self.config)
+            metrics.start()
+            metrics.stop()
+            return (
+                context,
+                TrajectoryOutcome(
+                    status=TrajectoryStatus.ERROR,
+                    error=f"branch_manager.create_branch() raised: {exc}",
+                ),
+                control,
+            )
 
         git_root = (
             context.worktree_path
@@ -65,11 +97,35 @@ class BranchSessionLauncher:
         metrics = MetricsTracker()
         control = TrajectoryControl(monitor, detector, metrics, self.config)
 
-        runner = self.runner_factory()
-        runner.reset(context)
+        try:
+            runner = self.runner_factory()
+            runner.reset(context)
+        except Exception as exc:
+            metrics.start()
+            metrics.stop()
+            return (
+                context,
+                TrajectoryOutcome(
+                    status=TrajectoryStatus.ERROR,
+                    error=f"runner_factory() raised: {exc}",
+                ),
+                control,
+            )
 
         metrics.start()
-        outcome = runner.run(control)
-        metrics.stop()
+        try:
+            outcome = runner.run(control)
+            if outcome is None:
+                outcome = TrajectoryOutcome(
+                    status=TrajectoryStatus.ERROR,
+                    error="runner.run() returned None",
+                )
+        except Exception as exc:
+            outcome = TrajectoryOutcome(
+                status=TrajectoryStatus.ERROR,
+                error=f"runner.run() raised: {exc}",
+            )
+        finally:
+            metrics.stop()
 
         return context, outcome, control

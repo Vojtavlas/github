@@ -48,13 +48,13 @@ The public API lives in `src/reasonflow/__init__.py` and the main entry point is
 | `BranchResult` / `SolveResult` (`results.py`) | Dataclasses for generated text, confidence, verification score, early-exit layer, and timing. |
 | `Metrics` (`metrics.py`) | Simple `speedup` and `mean_speedup` helpers for benchmark scripts. |
 | `TrajectoryMonitor` / `StagnationDetector` / `ExperiencePacket` (`branch_and_share/`) | Failure-aware Pi coding-agent layer: `TrajectoryMonitor` records tool calls, repo changes, tests, and tokens; `StagnationDetector` signals repeated commands/file reads, no test improvement, tool failures, code churn, and token-limit approach; `ExperiencePacketBuilder` grounds the summary in git, logs, and test output. |
-| `BranchAndShareEngine` (`branch_and_share/engine.py`) | Orchestrates running a Pi trajectory, branching on stagnation, sharing an experience packet, and resuming from the original state or a checkpoint. |
-| `BranchManager` / `GitWorktreeBranchManager` / `MemoryBranchManager` (`branch_and_share/branch_manager.py`) | Creates isolated branches via git worktrees or in-memory references; checkpoints a stuck attempt so the next branch can start from it. |
+| `BranchAndShareEngine` (`branch_and_share/engine.py`) | Orchestrates running a Pi trajectory, branching on stagnation, sharing an experience packet, and resuming from the original state or a checkpoint. Hardened to return a `ShareResult` even when launchers, runners, or stores fail. |
+| `BranchManager` / `GitWorktreeBranchManager` / `MemoryBranchManager` (`branch_and_share/branch_manager.py`) | Creates isolated branches via git worktrees or in-memory references; raises `BranchManagerError` (with command/rc/stderr) for git and validation failures. |
 | `PiAdapter` / `MockPiAdapter` / `FileStreamPiAdapter` / `SubprocessPiAdapter` / `TailPiAdapter` (`branch_and_share/adapter.py`) | Plugin seam for the Pi agent loop. `FileStreamPiAdapter` replays a newline-delimited JSON event file; `SubprocessPiAdapter` runs a command and replays its stdout events; `TailPiAdapter` tails a growing JSONL log; `MockPiAdapter` replays scripted scenarios for tests. |
-| `ExperienceStore` (`branch_and_share/store.py`) | Append-only JSONL persistence for `ExperiencePacket`s. Loads recent packets for seeding the next branch. |
+| `ExperienceStore` (`branch_and_share/store.py`) | Append-only JSONL persistence for `ExperiencePacket`s. Skips corrupted lines with a warning, caps loaded history to `max_history`, and loads recent packets for seeding the next branch. |
 | `BranchSessionLauncher` (`branch_and_share/launcher.py`) | Creates a branch, seeds `.branch_context.json`, runs the trajectory, and returns `(BranchContext, TrajectoryOutcome, TrajectoryControl)`. |
 | `Event` dataclasses / `EventStreamReader` (`branch_and_share/protocol.py`, `branch_and_share/stream.py`) | Typed `Event` subclasses and `_validate_event` centralize JSON parsing; `EventStreamReader` streams chunks into whole lines (CRLF, partial lines, missing trailing newline) with line numbers. |
-| `BranchAndShareConfig` / `StagnationConfig` (`branch_and_share/config.py`) | Top-level branch-and-share hyperparameters. |
+| `BranchAndShareConfig` / `StagnationConfig` (`branch_and_share/config.py`) | Top-level branch-and-share hyperparameters, including `max_branches`, `max_history`, `timeout_seconds`, and `heartbeat_interval`. |
 
 ## Project structure
 
@@ -114,6 +114,10 @@ tests/
   test_branch_and_share_stream.py      EventStreamReader / protocol unit tests
   test_branch_and_share_subprocess.py  `SubprocessPiAdapter` unit tests
   test_branch_and_share_tail.py        `TailPiAdapter` unit tests
+  test_branch_and_share_adversarial.py    Adapter adversarial tests (FileStream / Subprocess)
+  test_branch_and_share_store_adversarial.py  `ExperienceStore` corruption / max_history tests
+  test_branch_and_share_branch_manager_adversarial.py  `BranchManagerError` and failure-mode tests
+  test_branch_and_share_engine_adversarial.py  Engine / launcher failure-mode tests
 
 .github/workflows/ci.yml   GitHub Actions CI
 pyproject.toml             Package metadata, dependencies, tool configs
@@ -157,7 +161,7 @@ Use `ce-worktree` (preferred) or `using-git-worktrees` when starting isolated fe
 - `pytest` with tests named `test_*.py`.
 - Engine integration tests in `test_engine.py` load `Qwen/Qwen3.5-0.8B` and are skipped when `SKIP_ENGINE_TESTS=1`.
 - Prefer real code over mocks unless unavoidable.
-The current baseline is: `ruff check src tests examples` clean; `SKIP_ENGINE_TESTS=1 py -3.11 -m pytest -q` reports `163 passed, 4 skipped`; a full run `py -3.11 -m pytest -q` reports `167 passed`.
+The current baseline is: `ruff check src tests examples` clean; `SKIP_ENGINE_TESTS=1 py -3.11 -m pytest -q` reports `212 passed, 4 skipped`; a full run `py -3.11 -m pytest -q` reports `216 passed`.
 
 ## Benchmark conventions
 
