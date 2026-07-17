@@ -62,7 +62,7 @@ def test_generate_asks_reuses_prefix():
     decoder.continue_generate.assert_called_once()
 
 
-def test_generate_asks_falls_back_to_baseline():
+def test_generate_asks_continues_from_prefill():
     cfg = _config(max_new_tokens=3)
     model = MagicMock()
     prefill_out = MagicMock()
@@ -76,9 +76,9 @@ def test_generate_asks_falls_back_to_baseline():
     asks.score_branch.return_value = False
 
     decoder = MagicMock()
-    # Prompt has 2 tokens, generate 3 -> sequence length 5.
-    decoder.decode.return_value = (
-        torch.tensor([[10, 11, 12, 13, 14]]),
+    # Suffix has 2 tokens, generate 3 new tokens.
+    decoder.continue_generate.return_value = (
+        torch.tensor([[12, 13, 14]]),
         0.7,
         MagicMock(),
     )
@@ -89,8 +89,9 @@ def test_generate_asks_falls_back_to_baseline():
     assert isinstance(result, BranchResult)
     assert result.branch_id == 1
     assert result.generation_confidence == pytest.approx(0.7)
-    decoder.decode.assert_called_once()
-    decoder.continue_generate.assert_not_called()
+    asks.score_branch.assert_called_once()
+    decoder.continue_generate.assert_called_once()
+    decoder.decode.assert_not_called()
 
 
 def test_generate_baseline_branch():
