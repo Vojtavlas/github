@@ -3,6 +3,7 @@ import types
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
 import torch
 import torch.nn.functional as F
 
@@ -14,7 +15,14 @@ if "reasonflow.model_adapter" not in sys.modules:
     sys.modules["reasonflow.model_adapter"] = model_adapter_stub
 
 import reasonflow.cgee as cgee_module
-from reasonflow.cgee import CGEEAnalyzer, EarlyExitStrategy, EntropyTracker, ExitSignal, HookAdapter
+from reasonflow.cgee import (
+    CGEEAnalyzer,
+    EarlyExitSignal,
+    EarlyExitStrategy,
+    EntropyTracker,
+    ExitSignal,
+    HookAdapter,
+)
 from reasonflow.config import RKSCConfig
 
 
@@ -145,7 +153,8 @@ def test_hook_adapter_stops_on_exit_signal():
     hook1 = layers[1].register_forward_hook.call_args[0][0]
     fake_output = torch.randn(1, 2, 16)
 
-    hook0(layers[0], (fake_output,), fake_output)
+    with pytest.raises(EarlyExitSignal):
+        hook0(layers[0], (fake_output,), fake_output)
 
     assert adapter.exit_signal.layer_idx == 0
     assert callback_calls == [0]

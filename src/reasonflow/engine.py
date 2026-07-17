@@ -8,7 +8,7 @@ import torch
 from .asks import ASKSManager
 from .branch_generator import BranchGenerator
 from .cache import RSBCMManager
-from .cache_adapter import get_cache_adapter
+from .cache_adapter import clone_kv_cache
 from .cgee import CGEEAnalyzer
 from .config import EngineConfig
 from .decoder import Decoder
@@ -66,7 +66,7 @@ class MultiBranchEngine:
             self.asks,
             self.decoder,
             self.config,
-            clone_kv_cache_fn=get_cache_adapter,
+            clone_kv_cache_fn=clone_kv_cache,
             shared_prefix=_shared_prefix,
             branch_hint=lambda bid: _branch_hint(bid, DEFAULT_BRANCH_HINTS),
             device=self.device,
@@ -175,6 +175,6 @@ class MultiBranchEngine:
             branches=branches,
             generation_time_ms=gen_ms,
             verification_time_ms=verification_ms,
-            total_ms=total_ms,
+            total_time_ms=total_ms,
             skipped_verification=False,
         )

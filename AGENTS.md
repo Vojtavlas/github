@@ -33,10 +33,11 @@ The public API lives in `src/reasonflow/__init__.py` and the main entry point is
 | `Problem` | Input math/word problem string. |
 | `Shared prefix` | `"You are a helpful assistant...\n\nProblem: {problem}\n\nReasoning:"` computed once per solve. |
 | `Branch hint` | One of `DEFAULT_BRANCH_HINTS` appended to the prefix to encourage a different reasoning strategy per branch. |
-| `ASKSManager` (`asks.py`) | Captures root hidden states and KV cache; computes layer-wise cosine similarity; gates whether a branch can reuse the root KV cache (`score_branch`). |
+| `ASKSManager` (`asks.py`) | Captures root hidden states and KV cache; delegates similarity computation to a `SimilarityMetric` and layer weighting to a `WeightingStrategy`; gates whether a branch can reuse the root KV cache (`score_branch`). |
+| `SimilarityMetric` / `WeightingStrategy` (`asks.py`) | Pluggable seam behind ASKS: `SimilarityMetric` computes per-layer or scalar similarity; `WeightingStrategy` combines layer scores (exponential or uniform). |
 | `BranchGenerator` (`branch_generator.py`) | Builds a branch prompt, runs prefix+hint prefill, checks ASKS, and decodes. `generate_baseline_branch` generates from scratch (no KV reuse). |
 | `Decoder` + `Sampler` (`decoder.py`, `sampler.py`) | Autoregressive decoding with temperature, top-p, or greedy; returns token sequence and mean generation confidence. |
-| `CGEEAnalyzer` (`cgee.py`) | Two-level confidence gating. Level 1: skip verification if one branch is confident and leads by a wide gap. Level 2: exit the verifier forward pass early when per-layer output entropy becomes low and stable. |
+| `CGEEAnalyzer` (`cgee.py`) | Two-level confidence gating. Level 1: skip verification if one branch is confident and leads by a wide gap. Level 2: exit the verifier forward pass early when per-layer output entropy becomes low and stable. Composes `EntropyTracker`, `EarlyExitStrategy`, and `HookAdapter`. |
 | `Verifier` (`verifier.py`) | Prompts the model with `"Is this answer correct? Answer YES or NO."` and scores the answer by the probability of `YES`. |
 | `RSBCMManager` (`cache.py`) | Reasoning-Selective Block Cache Manager: allocates and evicts KV blocks by `importance / (tree_depth + 1)` priority for deep tree searches. |
 | `CacheAdapter` (`cache_adapter.py`) | Pluggable adapters for cloning and expanding different Hugging Face KV cache formats (`DynamicCache`, model-specific subclasses, iterable caches, legacy tuples). |
@@ -52,7 +53,7 @@ The public API lives in `src/reasonflow/__init__.py` and the main entry point is
 src/reasonflow/
   __init__.py              Public exports; imports MultiBranchEngine only if adapters are present
   config.py                EngineConfig, RKSCConfig, RSBCMConfig
-  utils.py                 load_model_and_tokenizer, get_transformer_layers, KV helper fallbacks
+  utils.py                 load_model_and_tokenizer, squeeze_hidden
   asks.py                  ASKSManager and pluggable SimilarityMetric / WeightingStrategy
   cgee.py                  CGEEAnalyzer, EntropyTracker, EarlyExitStrategy, HookAdapter
   cache.py                 RSBCMManager block cache
@@ -124,7 +125,7 @@ Use `ce-worktree` (preferred) or `using-git-worktrees` when starting isolated fe
 - `pytest` with tests named `test_*.py`.
 - Engine integration tests in `test_engine.py` load `Qwen/Qwen3.5-0.8B` and are skipped when `SKIP_ENGINE_TESTS=1`.
 - Prefer real code over mocks unless unavoidable.
-- The current baseline is: `ruff check src tests examples` clean and `SKIP_ENGINE_TESTS=1 py -3.11 -m pytest -q` reports `57 passed, 4 skipped`.
+- The current baseline is: `ruff check src tests examples` clean; `SKIP_ENGINE_TESTS=1 py -3.11 -m pytest -q` reports `57 passed, 4 skipped`; a full run `py -3.11 -m pytest -q` reports `61 passed`.
 
 ## Skill map: what to use and when
 
@@ -159,6 +160,46 @@ These overlap with the core map above or are for other kinds of work:
 - `ce-babysit-pr`, `ce-test-browser`, `computer-use`, `orca-cli`, `orchestration`, `ce-riffrec-feedback-analysis`, `ce-pov`, `ce-ideate`, `ce-strategy`, `ce-explain`, `ce-optimize`, `ce-proof`, `ce-handoff`, `ce-doc-review` — not applicable to routine work in this Python research repo.
 
 If a future task clearly needs one of these, use it; otherwise default to the core map.
+
+## Subagent-first execution workflows
+
+The codebase is small enough to read quickly, but it is intentionally modular (ASKS, CGEE, cache adapters, model adapters, engine, sampler/decoder, verifier). **Default to subagents** for any task that touches more than one file or needs more than a few minutes of exploration. Inline work is reserved for one-liners and trivial fixes.
+
+### When and how many agents
+
+| Work type | When to dispatch | Typical count | Agent / skill | What each agent does |
+|-----------|------------------|---------------|---------------|----------------------|
+| Broad repo exploration | Starting work in an unfamiliar area; mapping the domain model | 3–5, up to 10 for a full sweep | `subagent_explore` (or `ce-work` scout phase) | Each reads a focused slice (one source file or one test file) and returns a concise summary + dependencies. The main agent synthesizes. |
+| Multi-unit implementation | A `ce-plan` has independent implementation units | 1 per unit, batched by dependency layer | `subagent_general` inside `ce-work` | Implement one unit, write focused tests, self-review, and report evidence. |
+| Parallel debugging | 2+ unrelated test failures or independent bugs | 1 per failure domain | `subagent_general` (or `ce-debug` for a single deep bug) | Investigate root cause independently, then merge non-conflicting fixes. |
+| Cross-cutting review | Large change touches many files or risky areas | `ce-code-review` already spawns a roster | Generic subagents with reviewer personas | Run correctness, testing, maintainability, and performance lenses. |
+| Benchmark / tuning | Comparing hyperparameters, samplers, or cache strategies | 3–5 | `subagent_general` | Each runs one configuration; main agent aggregates speed/accuracy results. |
+| Documentation / learnings | After solving a non-trivial problem | 1 | `subagent_explore` or main agent with `ce-compound` | Draft `docs/solutions/` or `CONCEPTS.md` entry for future agents. |
+
+### Example: 10-agent repo sweep
+
+When ramping up on a new component or verifying the state of `src/reasonflow/`, dispatch up to 10 `subagent_explore` agents in parallel, one per file:
+
+```
+subagent 1 -> read src/reasonflow/asks.py      -> summarize ASKS gating and metrics
+subagent 2 -> read src/reasonflow/cgee.py      -> summarize CGEE levels and hooks
+subagent 3 -> read src/reasonflow/cache.py     -> summarize RSBCM block cache
+...
+```
+
+Each agent returns: (1) the file's single responsibility, (2) its main classes/functions, (3) its direct dependencies in this repo, and (4) any obvious risks. The main agent then synthesizes these into a coherent plan.
+
+### Dispatch rules
+
+- **One task per agent.** Broad prompts produce broad, unusable answers.
+- **Batch by independence.** Only run agents in parallel when their files/workspaces do not overlap; serialize when they touch the same module or shared state.
+- **Cap at ~5 for implementation, ~10 for exploration.** More agents add merge overhead without adding signal.
+- **Hand off artifacts as files.** Give each agent a brief file and ask it to write its report to a uniquely named file; do not paste large outputs back into the main context.
+- **Use `ce-work` for planned implementation** and `dispatching-parallel-agents` for ad-hoc parallel exploration or debugging (2+ independent tasks outside a formal plan).
+
+### Skill note
+
+`dispatching-parallel-agents` is the recommended skill for ad-hoc parallel dispatch of independent exploration, debugging, or verification tasks. `ce-work` already handles parallel subagents when executing an implementation plan, so do not double-dispatch the same work.
 
 ## When to update this file
 

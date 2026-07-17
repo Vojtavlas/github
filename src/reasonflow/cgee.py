@@ -15,6 +15,13 @@ class ExitSignal:
         self.layer_idx = layer_idx
 
 
+class EarlyExitSignal(Exception):
+    """Raised by HookAdapter to stop the transformer forward pass early."""
+
+    def __init__(self, layer_idx: int):
+        self.layer_idx = layer_idx
+
+
 class EntropyTracker:
     """Compute and record the per-layer output entropy of a transformer."""
 
@@ -95,6 +102,7 @@ class HookAdapter:
         if signal is not None:
             self.exit_signal = signal
             self.remove_hooks()
+            raise EarlyExitSignal(signal.layer_idx)
 
     def register_hooks(self, model):
         """Register a forward hook on every transformer layer."""
@@ -162,6 +170,8 @@ class CGEEAnalyzer:
         try:
             with torch.inference_mode():
                 out = model(input_ids=input_ids, attention_mask=attention_mask)
+        except EarlyExitSignal:
+            pass
         finally:
             adapter.remove_hooks()
 

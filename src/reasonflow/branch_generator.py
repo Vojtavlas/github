@@ -4,10 +4,10 @@ from typing import Callable, Optional
 
 import torch
 
+from .cache_adapter import clone_kv_cache
 from .config import EngineConfig
 from .decoder import Decoder
 from .results import BranchResult
-from .utils import clone_kv_cache
 
 
 class BranchGenerator:
