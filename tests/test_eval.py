@@ -193,3 +193,12 @@ def test_evaluator_runs_offline():
     assert report.speedup == 240.0 / 200.0
     assert engine.solve.call_count == 2
     assert engine.baseline_solve.call_count == 2
+
+
+def test_public_api_exports():
+    from reasonflow import EvalConfig, EvalReport, Evaluator, InMemoryDataset
+
+    assert Evaluator is not None
+    assert EvalConfig is not None
+    assert EvalReport is not None
+    assert InMemoryDataset is not None

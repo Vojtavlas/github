@@ -4,8 +4,8 @@ import csv
 import json
 import re
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Protocol, Tuple, Union
+from dataclasses import asdict, dataclass
+from typing import Any, List, Optional, Protocol, Tuple
 
 
 @dataclass
@@ -119,7 +119,11 @@ class NumericMatchMetric(Metric):
             return ExactMatchMetric().score(prediction, gold)
         import math
 
-        return 1.0 if math.isclose(pred_num, gold_num, rel_tol=self.rel_tol, abs_tol=self.abs_tol) else 0.0
+        return (
+            1.0
+            if math.isclose(pred_num, gold_num, rel_tol=self.rel_tol, abs_tol=self.abs_tol)
+            else 0.0
+        )
 
     @staticmethod
     def _parse(text: str) -> Optional[float]:
@@ -222,8 +226,19 @@ class EvalReport:
             json.dump(data, f, indent=2)
 
     def save_csv(self, path: str) -> None:
+        fieldnames = [
+            "problem_id",
+            "problem",
+            "gold",
+            "rksc_prediction",
+            "baseline_prediction",
+            "rksc_score",
+            "baseline_score",
+            "rksc_ms",
+            "baseline_ms",
+        ]
         with open(path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=["problem_id", "problem", "gold", "rksc_prediction", "baseline_prediction", "rksc_score", "baseline_score", "rksc_ms", "baseline_ms"])
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for r in self.results:
                 writer.writerow(asdict(r))
