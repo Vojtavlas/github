@@ -5,10 +5,12 @@ from .adapter import (
     MockPiAdapter,
     PiAdapter,
     SubprocessPiAdapter,
+    TailPiAdapter,
     TrajectoryRunner,
 )
 from .branch_manager import (
     BranchManager,
+    BranchManagerError,
     BranchStartPoint,
     GitWorktreeBranchManager,
     MemoryBranchManager,
@@ -37,6 +39,7 @@ __all__ = [
     "BranchAndShareEngine",
     "BranchContext",
     "BranchManager",
+    "BranchManagerError",
     "BranchMetrics",
     "BranchSessionLauncher",
     "BranchStartPoint",
@@ -54,6 +57,7 @@ __all__ = [
     "StagnationDetector",
     "StagnationReport",
     "SubprocessPiAdapter",
+    "TailPiAdapter",
     "TrajectoryControl",
     "TrajectoryMonitor",
     "TrajectoryOutcome",

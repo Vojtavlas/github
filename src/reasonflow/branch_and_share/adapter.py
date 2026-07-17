@@ -2,14 +2,32 @@
 
 import json
 import os
+import queue
 import subprocess
+import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TextIO, Union
 
 from .control import TrajectoryControl
+from .protocol import (
+    CommandEvent,
+    DiscoveryEvent,
+    Event,
+    FileChangeEvent,
+    FileReadEvent,
+    HypothesisEvent,
+    MalformedEventError,
+    ModelCallEvent,
+    StatusEvent,
+    TestEvent,
+    TokenUsageEvent,
+    ToolCallEvent,
+    _validate_event,
+)
 from .results import BranchContext, StagnationReport, TrajectoryOutcome, TrajectoryStatus
+from .stream import EventStreamReader
 
 
 class TrajectoryRunner(ABC):
@@ -44,71 +62,69 @@ class PiAdapter(TrajectoryRunner):
         ...
 
 
-def _apply_event(event: Dict[str, Any], control: TrajectoryControl) -> Optional[TrajectoryOutcome]:
-    """Replay a single JSON event into ``control``.
+def _apply_event(event: Event, control: TrajectoryControl) -> Optional[TrajectoryOutcome]:
+    """Replay a validated ``Event`` into ``control``.
 
     Returns an outcome only when the event is an explicit ``status`` event.
     """
-    kind = event.get("kind")
-    if kind == "tool_call":
+    if isinstance(event, ToolCallEvent):
         control.record_tool_call(
-            name=event["name"],
-            args=event.get("args", {}),
-            result=event.get("result"),
-            failed=event.get("failed", False),
-            tokens=event.get("tokens", 0),
+            name=event.name,
+            args=event.args or {},
+            result=event.result,
+            failed=event.failed,
+            tokens=event.tokens,
         )
-    elif kind == "file_read":
+    elif isinstance(event, FileReadEvent):
         control.record_file_read(
-            path=event["path"],
-            symbols=event.get("symbols"),
+            path=event.path,
+            symbols=event.symbols,
         )
-    elif kind == "command":
+    elif isinstance(event, CommandEvent):
         control.record_command(
-            command=event["command"],
-            output=event.get("output", ""),
-            exit_code=event.get("exit_code", 0),
+            command=event.command,
+            output=event.output,
+            exit_code=event.exit_code,
         )
-    elif kind == "test":
+    elif isinstance(event, TestEvent):
         control.record_test_result(
-            name=event["name"],
-            passed=event.get("passed", True),
-            output=event.get("output", ""),
+            name=event.name,
+            passed=event.passed,
+            output=event.output,
         )
-    elif kind == "file_change":
+    elif isinstance(event, FileChangeEvent):
         control.record_file_change(
-            path=event["path"],
-            change_type=event.get("change_type", "modified"),
-            old_hash=event.get("old_hash"),
-            new_hash=event.get("new_hash"),
+            path=event.path,
+            change_type=event.change_type,
+            old_hash=event.old_hash,
+            new_hash=event.new_hash,
         )
-    elif kind == "model_call":
-        control.record_model_call(tokens=event.get("tokens", 0))
-    elif kind == "token_usage":
-        control.record_token_usage(event.get("n", 0))
-    elif kind == "hypothesis":
+    elif isinstance(event, ModelCallEvent):
+        control.record_model_call(tokens=event.tokens)
+    elif isinstance(event, TokenUsageEvent):
+        control.record_token_usage(event.n)
+    elif isinstance(event, HypothesisEvent):
         control.record_hypothesis(
-            description=event["description"],
-            action=event["action"],
-            expected_test_change=event["expected"],
-            observed=event.get("observed", ""),
-            failed=event.get("failed", True),
+            description=event.description,
+            action=event.action,
+            expected_test_change=event.expected_test_change,
+            observed=event.observed,
+            failed=event.failed,
         )
-    elif kind == "discovery":
-        control.record_discovery(event["text"])
-    elif kind == "status":
-        status = event.get("status")
-        if status == "success":
+    elif isinstance(event, DiscoveryEvent):
+        control.record_discovery(event.text)
+    elif isinstance(event, StatusEvent):
+        if event.status == "success":
             return TrajectoryOutcome(
                 status=TrajectoryStatus.SUCCESS,
-                result=event.get("result"),
+                result=event.result,
             )
-        if status == "error":
+        if event.status == "error":
             return TrajectoryOutcome(
                 status=TrajectoryStatus.ERROR,
-                error=event.get("error", ""),
+                error=event.error,
             )
-        if status == "stagnation":
+        if event.status == "stagnation":
             report = control.check_stagnation()
             if report is None:
                 report = StagnationReport(
@@ -117,12 +133,13 @@ def _apply_event(event: Dict[str, Any], control: TrajectoryControl) -> Optional[
                     confidence=1.0,
                 )
             return TrajectoryOutcome(status=TrajectoryStatus.STAGNATION, report=report)
-        return TrajectoryOutcome(
-            status=TrajectoryStatus.SUCCESS,
-            result=event.get("result"),
+        raise MalformedEventError(
+            f"Unrecognized status value: {event.status!r}", event.line_no
         )
     else:
-        raise ValueError(f"Unknown event kind: {kind}")
+        raise MalformedEventError(
+            f"Unknown event kind: {event.kind!r}", event.line_no
+        )
     return None
 
 
@@ -172,22 +189,31 @@ class FileStreamPiAdapter(PiAdapter):
 
     def run(self, control: TrajectoryControl) -> TrajectoryOutcome:
         if isinstance(self.source, (str, Path)):
-            with Path(self.source).open("r", encoding="utf-8") as stream:
-                return self._run_stream(stream, control)
+            try:
+                with Path(self.source).open("r", encoding="utf-8") as stream:
+                    return self._run_stream(stream, control)
+            except FileNotFoundError as exc:
+                return TrajectoryOutcome(
+                    status=TrajectoryStatus.ERROR,
+                    error=f"Event log not found: {self.source} ({exc})",
+                )
         return self._run_stream(self.source, control)
 
     def _run_stream(self, stream: TextIO, control: TrajectoryControl) -> TrajectoryOutcome:
-        for raw_line in self._iter_lines(stream):
-            line = raw_line.strip()
-            if not line:
-                continue
-            event = json.loads(line)
-            outcome = _apply_event(event, control)
-            if outcome is not None:
-                return outcome
-            stale = _check_stagnation(control)
-            if stale is not None:
-                return stale
+        reader = EventStreamReader(self._iter_lines(stream))
+        try:
+            for event in reader:
+                outcome = _apply_event(event, control)
+                if outcome is not None:
+                    return outcome
+                stale = _check_stagnation(control)
+                if stale is not None:
+                    return stale
+        except MalformedEventError as exc:
+            return TrajectoryOutcome(
+                status=TrajectoryStatus.ERROR,
+                error=str(exc),
+            )
         return TrajectoryOutcome(
             status=TrajectoryStatus.SUCCESS,
             result={"message": "completed"},
@@ -199,7 +225,9 @@ class SubprocessPiAdapter(PiAdapter):
 
     The subprocess is launched in the branch worktree with ``BRANCH_ID`` and
     ``BRANCH_CONTEXT_PATH`` environment variables. Its ``stdout`` is consumed
-    line-by-line as JSON events.
+    line-by-line in a dedicated reader thread and placed on a queue. The main
+    thread applies events with a ``heartbeat_interval`` poll and an overall
+    ``timeout_seconds`` guard, checking for stagnation between events.
     """
 
     def __init__(
@@ -207,13 +235,15 @@ class SubprocessPiAdapter(PiAdapter):
         command: List[str],
         context_path: Optional[str] = None,
         env: Optional[Dict[str, str]] = None,
-        poll_interval: float = 0.05,
+        timeout_seconds: Optional[float] = None,
+        heartbeat_interval: Optional[float] = None,
     ) -> None:
         super().__init__()
         self.command = command
         self.context_path = context_path
         self.env = env or {}
-        self.poll_interval = poll_interval
+        self.timeout_seconds = timeout_seconds
+        self.heartbeat_interval = heartbeat_interval
 
     def reset(self, context: BranchContext) -> None:
         super().reset(context)
@@ -230,9 +260,36 @@ class SubprocessPiAdapter(PiAdapter):
             environment["BRANCH_WORKTREE"] = str(self.context.worktree_path)
         return environment
 
+    def _stream_lines(
+        self, stdout: TextIO, q: "queue.Queue[Union[str, Exception, None]]"
+    ) -> None:
+        """Read lines from ``stdout`` and push them onto ``q``."""
+        try:
+            while True:
+                line = stdout.readline()
+                if line == "":
+                    break
+                q.put(line)
+        except Exception as exc:
+            q.put(exc)
+        finally:
+            q.put(None)
+
     def run(self, control: TrajectoryControl) -> TrajectoryOutcome:
         if self.context is None:
             raise RuntimeError("SubprocessPiAdapter.run() called before reset()")
+
+        timeout = (
+            self.timeout_seconds
+            if self.timeout_seconds is not None
+            else control.config.timeout_seconds
+        )
+        heartbeat = (
+            self.heartbeat_interval
+            if self.heartbeat_interval is not None
+            else control.config.heartbeat_interval
+        )
+
         process = subprocess.Popen(
             self.command,
             cwd=self.context.worktree_path,
@@ -243,39 +300,109 @@ class SubprocessPiAdapter(PiAdapter):
             encoding="utf-8",
         )
         outcome: Optional[TrajectoryOutcome] = None
-        if process.stdout is not None:
-            for raw_line in iter(process.stdout.readline, ""):
-                line = raw_line.strip()
-                if not line:
-                    continue
+        reader_thread: Optional[threading.Thread] = None
+
+        try:
+            if process.stdout is None:
+                raise RuntimeError("Subprocess stdout is not available")
+
+            q: "queue.Queue[Union[str, Exception, None]]" = queue.Queue()
+            reader_thread = threading.Thread(
+                target=self._stream_lines,
+                args=(process.stdout, q),
+                daemon=True,
+            )
+            reader_thread.start()
+
+            deadline = time.time() + timeout
+            line_no = 0
+            while True:
+                remaining = deadline - time.time()
+                if remaining <= 0.0:
+                    outcome = TrajectoryOutcome(
+                        status=TrajectoryStatus.ERROR,
+                        error="Subprocess timed out",
+                    )
+                    break
+
+                get_timeout = min(heartbeat, remaining)
                 try:
-                    event = json.loads(line)
+                    line = q.get(timeout=get_timeout)
+                except queue.Empty:
+                    stale = _check_stagnation(control)
+                    if stale is not None:
+                        outcome = stale
+                        break
+                    continue
+
+                if line is None:
+                    break
+
+                if isinstance(line, Exception):
+                    if isinstance(line, UnicodeDecodeError):
+                        outcome = TrajectoryOutcome(
+                            status=TrajectoryStatus.ERROR,
+                            error=f"Subprocess produced non-UTF-8 (binary) output: {line}",
+                        )
+                    else:
+                        outcome = TrajectoryOutcome(
+                            status=TrajectoryStatus.ERROR,
+                            error=f"Error reading subprocess output: {line}",
+                        )
+                    break
+
+                line_no += 1
+                text = line.rstrip("\r\n")
+                if not text.strip():
+                    continue
+
+                try:
+                    data = json.loads(text)
                 except json.JSONDecodeError as exc:
                     outcome = TrajectoryOutcome(
                         status=TrajectoryStatus.ERROR,
-                        error=f"Invalid JSON from subprocess: {exc}",
+                        error=f"Invalid JSON from subprocess line {line_no}: {exc}",
                     )
                     break
+
+                try:
+                    event = _validate_event(data, line_no)
+                except MalformedEventError as exc:
+                    outcome = TrajectoryOutcome(
+                        status=TrajectoryStatus.ERROR,
+                        error=str(exc),
+                    )
+                    break
+
                 outcome = _apply_event(event, control)
                 if outcome is not None:
                     break
+
                 stale = _check_stagnation(control)
                 if stale is not None:
                     outcome = stale
                     break
+        finally:
+            if outcome is not None and outcome.status != TrajectoryStatus.SUCCESS:
+                process.terminate()
+                try:
+                    process.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+            else:
+                try:
+                    process.wait(timeout=30.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
 
-        if outcome is not None and outcome.status != TrajectoryStatus.SUCCESS:
-            process.terminate()
-            try:
-                process.wait(timeout=5.0)
-            except subprocess.TimeoutExpired:
-                process.kill()
-        else:
-            try:
-                process.wait(timeout=30.0)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+            if reader_thread is not None and reader_thread.is_alive():
+                # Closing stdout unblocks the reader thread's readline call.
+                try:
+                    process.stdout.close()
+                except OSError:
+                    pass
+                reader_thread.join(timeout=2.0)
 
         if process.returncode != 0 and outcome is None:
             stderr = process.stderr.read() if process.stderr is not None else ""
@@ -285,6 +412,109 @@ class SubprocessPiAdapter(PiAdapter):
             )
 
         return outcome or TrajectoryOutcome(
+            status=TrajectoryStatus.SUCCESS,
+            result={"message": "completed"},
+        )
+
+
+class TailPiAdapter(PiAdapter):
+    """Tail a growing newline-delimited JSON log file in real time.
+
+    The adapter opens ``path``, starts at the current end-of-file, and polls
+    for newly appended lines every ``heartbeat_interval``. It replays each
+    line through :class:`TrajectoryControl` and returns on the first ``status``
+    event. If the file shrinks (log rotation or truncation), it resets to the
+    new end-of-file rather than re-reading from the beginning.
+    """
+
+    def __init__(
+        self,
+        path: Union[str, Path],
+        timeout_seconds: Optional[float] = None,
+        heartbeat_interval: Optional[float] = None,
+    ) -> None:
+        super().__init__()
+        self.path = Path(path)
+        self.timeout_seconds = timeout_seconds
+        self.heartbeat_interval = heartbeat_interval
+
+    def _resolve_timeouts(self, control: TrajectoryControl) -> tuple[float, float]:
+        timeout = (
+            self.timeout_seconds
+            if self.timeout_seconds is not None
+            else control.config.timeout_seconds
+        )
+        heartbeat = (
+            self.heartbeat_interval
+            if self.heartbeat_interval is not None
+            else control.config.heartbeat_interval
+        )
+        return timeout, heartbeat
+
+    def _iter_tail_lines(
+        self,
+        stream: TextIO,
+        heartbeat: float,
+        deadline: float,
+    ) -> Any:
+        """Yield new lines from ``stream`` until timeout or EOF sentinel."""
+        while time.time() < deadline:
+            line = stream.readline()
+            if line:
+                yield line
+                continue
+
+            try:
+                size = self.path.stat().st_size
+            except FileNotFoundError:
+                size = 0
+
+            pos = stream.tell()
+            if size < pos:
+                # Log was truncated/rotated; jump to the new end.
+                stream.seek(size)
+            elif size > pos:
+                # New data is already available; readline will pick it up.
+                continue
+            else:
+                time.sleep(heartbeat)
+
+    def run(self, control: TrajectoryControl) -> TrajectoryOutcome:
+        timeout, heartbeat = self._resolve_timeouts(control)
+        deadline = time.time() + timeout
+
+        try:
+            with self.path.open("r", encoding="utf-8") as stream:
+                stream.seek(0, 2)
+                reader = EventStreamReader(
+                    self._iter_tail_lines(stream, heartbeat, deadline)
+                )
+                try:
+                    for event in reader:
+                        outcome = _apply_event(event, control)
+                        if outcome is not None:
+                            return outcome
+                        stale = _check_stagnation(control)
+                        if stale is not None:
+                            return stale
+                except MalformedEventError as exc:
+                    return TrajectoryOutcome(
+                        status=TrajectoryStatus.ERROR,
+                        error=str(exc),
+                    )
+        except FileNotFoundError as exc:
+            return TrajectoryOutcome(
+                status=TrajectoryStatus.ERROR,
+                error=f"Log file not found: {self.path} ({exc})",
+            )
+
+        if time.time() >= deadline:
+            return TrajectoryOutcome(
+                status=TrajectoryStatus.ERROR,
+                error="Tail timed out",
+            )
+
+        return TrajectoryOutcome(
             status=TrajectoryStatus.SUCCESS,
             result={"message": "completed"},
         )
@@ -376,7 +606,7 @@ class MockPiAdapter(TrajectoryRunner):
             )
         elif kind == "discovery":
             control.record_discovery(step["text"])
-        elif kind == "tokens":
+        elif kind in ("token_usage", "tokens"):
             control.record_token_usage(step["n"])
         elif kind == "model_call":
             control.record_model_call(tokens=step.get("tokens", 0))
