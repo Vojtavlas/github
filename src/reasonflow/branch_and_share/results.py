@@ -149,3 +149,14 @@ class ShareResult:
     success: bool
     metrics: BranchMetrics
     final_packet: Optional[ExperiencePacket] = None
+@dataclass
+class BranchSessionReport:
+    """Summary report for a branch-and-share session."""
+
+    branches: List[BranchContext]
+    total_time_ms: float
+    pass_count: int
+    fail_count: int
+    final_success: bool
+    final_outcome: Optional[TrajectoryStatus]
+    metrics: BranchMetrics

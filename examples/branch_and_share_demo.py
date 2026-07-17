@@ -160,6 +160,17 @@ def main() -> None:
         else:
             print("No .branch_context.json found in latest worktree.")
 
+        session_files = list((repo / ".reasonflow" / "sessions").glob("*.jsonl"))
+        if session_files:
+            print("=== Session log ===")
+            print(f"path={session_files[0]}")
+            lines = session_files[0].read_text(encoding="utf-8").strip().splitlines()
+            print(f"lines={len(lines)}")
+            if lines:
+                print(f"first_event={lines[0][:200]}")
+        else:
+            print("No session log found.")
+
         _cleanup_worktrees(repo)
     finally:
         _rmtree(Path(tmp_dir))

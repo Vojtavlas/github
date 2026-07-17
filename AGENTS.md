@@ -48,13 +48,15 @@ The public API lives in `src/reasonflow/__init__.py` and the main entry point is
 | `BranchResult` / `SolveResult` (`results.py`) | Dataclasses for generated text, confidence, verification score, early-exit layer, and timing. |
 | `Metrics` (`metrics.py`) | Simple `speedup` and `mean_speedup` helpers for benchmark scripts. |
 | `TrajectoryMonitor` / `StagnationDetector` / `ExperiencePacket` (`branch_and_share/`) | Failure-aware Pi coding-agent layer: `TrajectoryMonitor` records tool calls, repo changes, tests, and tokens; `StagnationDetector` signals repeated commands/file reads, no test improvement, tool failures, code churn, and token-limit approach; `ExperiencePacketBuilder` grounds the summary in git, logs, and test output. |
-| `BranchAndShareEngine` (`branch_and_share/engine.py`) | Orchestrates running a Pi trajectory, branching on stagnation, sharing an experience packet, and resuming from the original state or a checkpoint. Hardened to return a `ShareResult` even when launchers, runners, or stores fail. |
+| `BranchAndShareEngine` (`branch_and_share/engine.py`) | Orchestrates running a Pi trajectory, branching on stagnation, sharing an experience packet, and resuming from the original state or a checkpoint. Hardened to return a `ShareResult`, writes a JSONL session log, and exposes `report() -> BranchSessionReport`. |
+| `BranchSessionLogger` (`branch_and_share/logging.py`) | Writes JSON-lines session logs to `<repo_root>/.reasonflow/sessions/<iso-timestamp>.jsonl`; validates path stays inside repo root and degrades to no-op when disabled. |
+| `BranchSessionReport` (`branch_and_share/results.py`) | Summary report from `BranchAndShareEngine.report()` with branches, timing, pass/fail counts, and final outcome. |
 | `BranchManager` / `GitWorktreeBranchManager` / `MemoryBranchManager` (`branch_and_share/branch_manager.py`) | Creates isolated branches via git worktrees or in-memory references; raises `BranchManagerError` (with command/rc/stderr) for git and validation failures. |
 | `PiAdapter` / `MockPiAdapter` / `FileStreamPiAdapter` / `SubprocessPiAdapter` / `TailPiAdapter` (`branch_and_share/adapter.py`) | Plugin seam for the Pi agent loop. `FileStreamPiAdapter` replays a newline-delimited JSON event file; `SubprocessPiAdapter` runs a command and replays its stdout events; `TailPiAdapter` tails a growing JSONL log; `MockPiAdapter` replays scripted scenarios for tests. |
 | `ExperienceStore` (`branch_and_share/store.py`) | Append-only JSONL persistence for `ExperiencePacket`s. Skips corrupted lines with a warning, caps loaded history to `max_history`, and loads recent packets for seeding the next branch. |
 | `BranchSessionLauncher` (`branch_and_share/launcher.py`) | Creates a branch, seeds `.branch_context.json`, runs the trajectory, and returns `(BranchContext, TrajectoryOutcome, TrajectoryControl)`. |
 | `Event` dataclasses / `EventStreamReader` (`branch_and_share/protocol.py`, `branch_and_share/stream.py`) | Typed `Event` subclasses and `_validate_event` centralize JSON parsing; `EventStreamReader` streams chunks into whole lines (CRLF, partial lines, missing trailing newline) with line numbers. |
-| `BranchAndShareConfig` / `StagnationConfig` (`branch_and_share/config.py`) | Top-level branch-and-share hyperparameters, including `max_branches`, `max_history`, `timeout_seconds`, and `heartbeat_interval`. |
+| `BranchAndShareConfig` / `StagnationConfig` (`branch_and_share/config.py`) | Top-level branch-and-share hyperparameters, including `max_branches`, `max_history`, `timeout_seconds`, `heartbeat_interval`, and `log_repo_root`. |
 
 ## Project structure
 
@@ -76,8 +78,9 @@ src/reasonflow/
     adapter.py               PiAdapter, MockPiAdapter, FileStreamPiAdapter, SubprocessPiAdapter
     launcher.py              BranchSessionLauncher
     store.py                 ExperienceStore
-    control.py               TrajectoryControl passed to runners
+    control.py               TrajectoryControl passed to runners (optionally logs actions to BranchSessionLogger)
     engine.py                BranchAndShareEngine orchestration
+    logging.py               BranchSessionLogger
   utils.py                 load_model_and_tokenizer, squeeze_hidden
   asks.py                  ASKSManager and pluggable SimilarityMetric / WeightingStrategy
   cgee.py                  CGEEAnalyzer, EntropyTracker, EarlyExitStrategy, HookAdapter
@@ -96,6 +99,8 @@ examples/
   benchmark_demo.py        Multi-problem benchmark
   branch_and_share_demo.py End-to-end branch_and_share demo with git worktrees and a subprocess agent
   pi_agent_stream.py       Streaming demo that tails a live JSONL event log
+  docs/
+    branch_and_share.md    JSON event protocol, custom PiAdapter guide, branching/seeding, and logging/reporting
 
 tests/
   test_asks.py
@@ -118,6 +123,7 @@ tests/
   test_branch_and_share_store_adversarial.py  `ExperienceStore` corruption / max_history tests
   test_branch_and_share_branch_manager_adversarial.py  `BranchManagerError` and failure-mode tests
   test_branch_and_share_engine_adversarial.py  Engine / launcher failure-mode tests
+  test_branch_and_share_logging.py       `BranchSessionLogger`, `engine.report()`, and session JSONL tests
 
 .github/workflows/ci.yml   GitHub Actions CI
 pyproject.toml             Package metadata, dependencies, tool configs
@@ -161,7 +167,7 @@ Use `ce-worktree` (preferred) or `using-git-worktrees` when starting isolated fe
 - `pytest` with tests named `test_*.py`.
 - Engine integration tests in `test_engine.py` load `Qwen/Qwen3.5-0.8B` and are skipped when `SKIP_ENGINE_TESTS=1`.
 - Prefer real code over mocks unless unavoidable.
-The current baseline is: `ruff check src tests examples` clean; `SKIP_ENGINE_TESTS=1 py -3.11 -m pytest -q` reports `212 passed, 4 skipped`; a full run `py -3.11 -m pytest -q` reports `216 passed`.
+The current baseline is: `ruff check src tests examples` clean; `SKIP_ENGINE_TESTS=1 py -3.11 -m pytest -q` reports `221 passed, 4 skipped`; a full run `py -3.11 -m pytest -q` reports `225 passed`.
 
 ## Benchmark conventions
 

@@ -20,12 +20,14 @@ from .control import TrajectoryControl
 from .detector import StagnationDetector
 from .engine import BranchAndShareEngine
 from .launcher import BranchSessionLauncher
+from .logging import BranchSessionLogger
 from .metrics import MetricsTracker
 from .monitor import TrajectoryMonitor
 from .packet import ExperiencePacketBuilder
 from .results import (
     BranchContext,
     BranchMetrics,
+    BranchSessionReport,
     ExperiencePacket,
     ShareResult,
     StagnationReport,
@@ -41,7 +43,9 @@ __all__ = [
     "BranchManager",
     "BranchManagerError",
     "BranchMetrics",
+    "BranchSessionLogger",
     "BranchSessionLauncher",
+    "BranchSessionReport",
     "BranchStartPoint",
     "ExperiencePacket",
     "ExperiencePacketBuilder",
