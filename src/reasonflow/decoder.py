@@ -14,6 +14,19 @@ class Decoder:
         self.sampler = sampler
         self.config = config
 
+    def _make_mask_buffer(self, attention_mask: torch.Tensor, max_new_tokens: int) -> torch.Tensor:
+        """Preallocate a mask buffer sized for the full decode sequence."""
+        batch_size = attention_mask.size(0)
+        init_len = attention_mask.size(1)
+        total_len = init_len + max_new_tokens
+        buffer = torch.ones(
+            (batch_size, total_len),
+            dtype=attention_mask.dtype,
+            device=attention_mask.device,
+        )
+        buffer[:, :init_len] = attention_mask
+        return buffer
+
     def decode(
         self,
         first_input_ids: torch.Tensor,
@@ -28,9 +41,7 @@ class Decoder:
         """
         generated: List[torch.Tensor] = []
         confidences: List[torch.Tensor] = []
-        finished = False
         curr_ids = first_input_ids
-        curr_mask = attention_mask
         pkv = past_key_values
         eos_id = self.tokenizer.eos_token_id
 
@@ -39,13 +50,14 @@ class Decoder:
                 f"Decoder currently only supports batch_size == 1, got {first_input_ids.size(0)}"
             )
 
+        mask_buffer = self._make_mask_buffer(attention_mask, max_new_tokens)
+        curr_len = first_input_ids.size(1)
+
         for _ in range(max_new_tokens):
-            if finished:
-                break
             with torch.inference_mode():
                 out = self.model(
                     input_ids=curr_ids,
-                    attention_mask=curr_mask,
+                    attention_mask=mask_buffer[:, :curr_len],
                     past_key_values=pkv,
                     use_cache=True,
                 )
@@ -54,20 +66,9 @@ class Decoder:
             generated.append(next_token)
             confidences.append(conf)
             if next_token.item() == eos_id:
-                finished = True
                 break
             curr_ids = next_token.unsqueeze(-1)
-            curr_mask = torch.cat(
-                [
-                    curr_mask,
-                    torch.ones(
-                        (curr_mask.size(0), 1),
-                        dtype=curr_mask.dtype,
-                        device=curr_mask.device,
-                    ),
-                ],
-                dim=1,
-            )
+            curr_len += 1
             pkv = out.past_key_values
 
         if generated:
@@ -88,7 +89,6 @@ class Decoder:
         """Continue autoregressive generation from a pre-computed first-token logit."""
         generated: List[torch.Tensor] = []
         confidences: List[torch.Tensor] = []
-        curr_mask = attention_mask
         pkv = past_key_values
         eos_id = self.tokenizer.eos_token_id
 
@@ -96,6 +96,9 @@ class Decoder:
             raise ValueError(
                 f"Decoder currently only supports batch_size == 1, got {first_logits.size(0)}"
             )
+
+        mask_buffer = self._make_mask_buffer(attention_mask, max_new_tokens)
+        curr_len = attention_mask.size(1)
 
         next_token, conf = self.sampler.sample(first_logits)
         generated.append(next_token)
@@ -106,23 +109,13 @@ class Decoder:
             return generated_ids, mean_conf, pkv
 
         curr_ids = next_token.unsqueeze(-1)
-        curr_mask = torch.cat(
-            [
-                curr_mask,
-                torch.ones(
-                    (curr_mask.size(0), 1),
-                    dtype=curr_mask.dtype,
-                    device=curr_mask.device,
-                ),
-            ],
-            dim=1,
-        )
+        curr_len += 1
 
         for _ in range(max_new_tokens - 1):
             with torch.inference_mode():
                 out = self.model(
                     input_ids=curr_ids,
-                    attention_mask=curr_mask,
+                    attention_mask=mask_buffer[:, :curr_len],
                     past_key_values=pkv,
                     use_cache=True,
                 )
@@ -133,17 +126,7 @@ class Decoder:
             if next_token.item() == eos_id:
                 break
             curr_ids = next_token.unsqueeze(-1)
-            curr_mask = torch.cat(
-                [
-                    curr_mask,
-                    torch.ones(
-                        (curr_mask.size(0), 1),
-                        dtype=curr_mask.dtype,
-                        device=curr_mask.device,
-                    ),
-                ],
-                dim=1,
-            )
+            curr_len += 1
             pkv = out.past_key_values
 
         generated_ids = torch.stack(generated, dim=1)

@@ -148,8 +148,7 @@ class BranchGenerator:
                 use_cache=True,
                 output_hidden_states=True,
             )
-        branch_hidden = prefill_out.hidden_states
-        reuse = self.asks.score_branch(branch_id, branch_hidden)  # noqa: F841
+        self.asks.score_branch(branch_id, prefill_out.hidden_states)
 
         if self.config.max_new_tokens == 0:
             generated_ids = suffix_ids.new_empty((1, 0))

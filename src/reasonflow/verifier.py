@@ -16,6 +16,12 @@ class Verifier:
         self.tokenizer = tokenizer
         self.cgee = cgee
         self.config = config
+        self._yes_ids = self._verifier_token_ids(
+            ["YES", "Yes", "yes", " YES", " Yes", " yes"]
+        )
+        self._no_ids = self._verifier_token_ids(
+            ["NO", "No", "no", " NO", " No", " no"]
+        )
         if device is not None:
             self.device = device
         elif config.device is not None:
@@ -44,19 +50,12 @@ class Verifier:
         if logits.ndim > 1:
             logits = logits[0]
 
-        yes_ids = self._verifier_token_ids(
-            ["YES", "Yes", "yes", " YES", " Yes", " yes"]
-        )
-        no_ids = self._verifier_token_ids(
-            ["NO", "No", "no", " NO", " No", " no"]
-        )
-
-        if not yes_ids and not no_ids:
+        if not self._yes_ids and not self._no_ids:
             return 0.5
 
         probs = torch.softmax(logits, dim=-1)
-        yes_mass = probs[list(yes_ids)].sum().item() if yes_ids else 0.0
-        no_mass = probs[list(no_ids)].sum().item() if no_ids else 0.0
+        yes_mass = probs[list(self._yes_ids)].sum().item() if self._yes_ids else 0.0
+        no_mass = probs[list(self._no_ids)].sum().item() if self._no_ids else 0.0
         return yes_mass / (yes_mass + no_mass + 1e-10)
 
     def _tokenize(self, text: str) -> Dict[str, torch.Tensor]:
