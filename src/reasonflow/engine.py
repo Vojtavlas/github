@@ -118,15 +118,21 @@ class MultiBranchEngine:
         self.asks.capture_root(prefix_pkv, root_out.hidden_states)
         prefix_ms = (time.perf_counter() - t0) * 1000
 
-        branches: List[BranchResult] = []
         gen_ms = 0.0
-        for b in range(self.config.branching_factor):
-            t_b = time.perf_counter()
-            branch = self.branch_generator.generate(
-                problem, b, prefix_inputs["input_ids"], prefix_pkv, prefix_len
+        t0_gen = time.perf_counter()
+        branches: List[BranchResult] = []
+        if self.config.use_batched_decoding:
+            branch_ids = list(range(self.config.branching_factor))
+            branches = self.branch_generator.generate_batch(
+                problem, branch_ids, prefix_inputs["input_ids"], prefix_pkv, prefix_len
             )
-            gen_ms += (time.perf_counter() - t_b) * 1000
-            branches.append(branch)
+        else:
+            for b in range(self.config.branching_factor):
+                branch = self.branch_generator.generate(
+                    problem, b, prefix_inputs["input_ids"], prefix_pkv, prefix_len
+                )
+                branches.append(branch)
+        gen_ms = (time.perf_counter() - t0_gen) * 1000
 
         # CGEE Level 1: skip verification if one branch is decisively confident.
         confs = [b.generation_confidence for b in branches]

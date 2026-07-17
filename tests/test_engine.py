@@ -154,6 +154,12 @@ def mock_engine(monkeypatch):
             generation_confidence=0.99,
         )
 
+    def fake_generate_batch(self, problem, branch_ids, prefix_ids, prefix_pkv, prefix_len):
+        return [
+            fake_generate(self, problem, b, prefix_ids, prefix_pkv, prefix_len)
+            for b in branch_ids
+        ]
+
     def fake_baseline(self, problem, branch_id):
         return BranchResult(
             branch_id=branch_id,
@@ -169,7 +175,7 @@ def mock_engine(monkeypatch):
     )
     engine = MultiBranchEngine(FakeModel(), tokenizer, cfg)
 
-    engine.branch_generator.generate = fake_generate.__get__(
+    engine.branch_generator.generate_batch = fake_generate_batch.__get__(
         engine.branch_generator, type(engine.branch_generator)
     )
     engine.branch_generator.generate_baseline_branch = fake_baseline.__get__(
@@ -209,3 +215,19 @@ def test_solve_resets_asks_records(mock_engine):
     mock_engine.solve("What is 3 + 3?")
     assert len(mock_engine.asks.records) == 2
     assert set(mock_engine.asks.records.keys()) == {0, 1}
+
+
+@pytest.mark.skipif(not ENGINE_AVAILABLE, reason="Engine adapters missing in worktree")
+def test_solve_uses_generate_batch_when_batched(mock_engine, monkeypatch):
+    """When use_batched_decoding is enabled, solve routes through generate_batch."""
+    mock_engine.config.branching_factor = 3
+
+    def fail_generate(*args, **kwargs):
+        raise AssertionError("generate() should not be called when batching is enabled")
+
+    monkeypatch.setattr(mock_engine.branch_generator, "generate", fail_generate)
+
+    result = mock_engine.solve("What is 2 + 2?")
+    assert len(result.branches) == 3
+    assert [b.text for b in result.branches] == ["branch 0", "branch 1", "branch 2"]
+    assert set(mock_engine.asks.records.keys()) == {0, 1, 2}
