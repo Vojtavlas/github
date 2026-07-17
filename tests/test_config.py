@@ -92,3 +92,18 @@ def test_engine_invalid_top_p():
 def test_engine_invalid_max_seq_len():
     with pytest.raises(ValueError):
         EngineConfig(max_seq_len=-1)
+
+
+def test_engine_config_batched_decoding():
+    cfg = EngineConfig()
+    assert cfg.use_batched_decoding is True
+
+    cfg = EngineConfig(use_batched_decoding=False)
+    assert cfg.use_batched_decoding is False
+
+    with pytest.raises(ValueError):
+        EngineConfig(use_batched_decoding=1)
+    with pytest.raises(ValueError):
+        EngineConfig(use_batched_decoding="true")
+    with pytest.raises(ValueError):
+        EngineConfig(use_batched_decoding=None)

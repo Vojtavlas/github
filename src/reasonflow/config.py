@@ -60,6 +60,7 @@ class EngineConfig:
     top_p: float = 0.95
     max_seq_len: int = 2048
     device: Optional[str] = None
+    use_batched_decoding: bool = True
 
     def __post_init__(self) -> None:
         if self.branching_factor <= 0:
@@ -72,3 +73,5 @@ class EngineConfig:
             raise ValueError("top_p must be in (0, 1]")
         if self.max_seq_len < 0:
             raise ValueError("max_seq_len must be >= 0")
+        if not isinstance(self.use_batched_decoding, bool):
+            raise ValueError("use_batched_decoding must be a bool")
