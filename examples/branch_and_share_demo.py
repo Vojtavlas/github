@@ -1,4 +1,4 @@
-"""End-to-end demo of branch_and_share with git worktrees and a subprocess Pi agent."""
+"""End-to-end demo of branch_and_share with git worktrees and a streaming Pi agent."""
 
 import os
 import shutil
@@ -52,23 +52,29 @@ def _init_temp_repo(tmp_dir: str) -> Path:
 
 
 def _agent_script(tmp_dir: str) -> Path:
-    script = Path(tmp_dir) / "pi_agent.py"
-    script.write_text(
-        "import json, os, sys\n"
-        "branch_id = int(os.environ.get('BRANCH_ID', '0'))\n"
-        "with open('foo.py', 'w') as f:\n"
-        "    f.write('bad' if branch_id == 0 else 'good')\n"
-        "if branch_id == 0:\n"
-        "    for _ in range(2):\n"
-        "        ev = {'kind': 'command', 'command': 'pytest -q', "
-        "'output': '1 failed', 'exit_code': 1}\n"
-        "        print(json.dumps(ev))\n"
-        "    print(json.dumps({'kind': 'status', 'status': 'stagnation'}))\n"
-        "else:\n"
-        "    ok = {'kind': 'test', 'name': 'test_foo', 'passed': True, 'output': ''}\n"
-        "    print(json.dumps(ok))\n"
-        "    print(json.dumps({'kind': 'status', 'status': 'success'}))\n"
-    )
+    script = Path(tmp_dir) / "pi_agent_stream.py"
+    source = Path(__file__).with_name("pi_agent_stream.py")
+    if source.exists():
+        shutil.copy2(str(source), str(script))
+    else:
+        # Fallback for environments where the example file is not adjacent.
+        script.write_text(
+            "import json, os, time\n"
+            "print(json.dumps({'kind':'tool_call','name':'read_file',"
+            "'args':{'path':'foo.py'}})); time.sleep(0.02)\n"
+            "if int(os.environ.get('BRANCH_ID','0')) == 0:\n"
+            "  for _ in range(3):\n"
+            "    print(json.dumps({'kind':'command','command':'pytest -q',"
+            "'output':'1 failed','exit_code':1})); time.sleep(0.02)\n"
+            "  print(json.dumps({'kind':'status','status':'stagnation'}))\n"
+            "else:\n"
+            "  print(json.dumps({'kind':'file_change','path':'foo.py',"
+            "'change_type':'modified'})); time.sleep(0.02)\n"
+            "  print(json.dumps({'kind':'test','name':'test_foo',"
+            "'passed':True,'output':''})); time.sleep(0.02)\n"
+            "  print(json.dumps({'kind':'status','status':'success',"
+            "'result':'fixed'}))\n"
+        )
     return script
 
 

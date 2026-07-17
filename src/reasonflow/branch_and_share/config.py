@@ -45,7 +45,13 @@ class BranchAndShareConfig:
     worktrees_dir: str = ".worktrees"
     use_git_worktrees: bool = True
     reuse_checkpoints: bool = True
+    timeout_seconds: float = 60.0
+    heartbeat_interval: float = 0.05
 
     def __post_init__(self) -> None:
         if self.max_branches <= 0:
             raise ValueError("max_branches must be > 0")
+        if self.timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be > 0")
+        if self.heartbeat_interval <= 0:
+            raise ValueError("heartbeat_interval must be > 0")
