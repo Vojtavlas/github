@@ -106,6 +106,11 @@ def test_extract_answer_uses_last_marker():
     assert ext.extract("answer is 5 and #### 42") == "42"
 
 
+def test_extract_answer_uses_last_marker_across_types():
+    ext = AnswerExtractor()
+    assert ext.extract("#### 5\\nAnswer: 42") == "42"
+
+
 def test_extract_answer_case_insensitive():
     ext = AnswerExtractor()
     assert ext.extract("ANSWER: 42") == "42"

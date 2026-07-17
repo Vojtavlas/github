@@ -66,42 +66,35 @@ class AnswerExtractor:
         if not text:
             return ""
 
-        # Try explicit markers (last occurrence, case-insensitive).
+        lower_text = text.lower()
+        last_pos = -1
+        last_marker = ""
         for marker in self.markers:
-            extracted = self._extract_after_marker(text, marker)
-            if extracted:
-                cleaned = self._clean(extracted)
-                if cleaned:
-                    return cleaned
+            pos = lower_text.rfind(marker.lower())
+            if pos > last_pos:
+                last_pos = pos
+                last_marker = marker
+        if last_pos != -1:
+            suffix = text[last_pos + len(last_marker) :]
+            cleaned = self._clean(suffix)
+            if cleaned:
+                return cleaned
 
-        # Try \boxed{...} with nested braces.
         boxed = self._extract_boxed(text)
         if boxed is not None:
             cleaned = self._clean(self._parse_latex_boxed(boxed))
             if cleaned:
                 return cleaned
 
-        # Try \frac{a}{b} outside a box.
         frac = self._parse_frac(text)
         if frac is not None:
             return frac
 
-        # Last number fallback.
         numbers = re.findall(r"-?\d+(?:,\d{3})*(?:\.\d+)?", text)
         if numbers:
             return self._clean(numbers[-1])
 
         return self._clean(text)
-
-    @staticmethod
-    def _extract_after_marker(text: str, marker: str) -> Optional[str]:
-        """Return text after the last case-insensitive occurrence of marker."""
-        lower_text = text.lower()
-        lower_marker = marker.lower()
-        pos = lower_text.rfind(lower_marker)
-        if pos == -1:
-            return None
-        return text[pos + len(marker) :]
 
     @staticmethod
     def _extract_boxed(text: str) -> Optional[str]:
