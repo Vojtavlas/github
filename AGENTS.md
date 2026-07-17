@@ -139,6 +139,7 @@ At the start of every task, invoke `using-superpowers` to surface applicable ski
 | `ce-plan` | Turning requirements/spec into an implementation plan | Enriches a `ce-brainstorm` artifact or works from a clear prompt. |
 | `ce-worktree` | Starting isolated feature work or reviewing a branch/PR in isolation | Creates/attaches worktrees under `.worktrees/`, keeps `main` clean. |
 | `ce-work` | Implementing a plan or a concrete build/change prompt end-to-end | Handles task breakdown, subagents, and local verification. |
+| `dispatching-parallel-agents` | Ad-hoc parallel dispatch of 2+ independent exploration/debug/review tasks | Use when the work is not part of a formal `ce-work` plan (see Subagent workflows). |
 | `test-driven-development` | Writing new behavior or fixing a bug | Write a failing test first, then the minimal code, then verify. |
 | `ce-debug` | Investigating test failures, regressions, stack traces, or unexpected behavior | Use before proposing fixes. |
 | `ce-code-review` | Reviewing a batch of changes before commit/PR | Multi-persona review; default applies safe fixes. |
@@ -152,7 +153,7 @@ At the start of every task, invoke `using-superpowers` to surface applicable ski
 
 These overlap with the core map above or are for other kinds of work:
 
-- `brainstorming`, `writing-plans`, `executing-plans`, `subagent-driven-development`, `dispatching-parallel-agents` — overlap with `ce-brainstorm` / `ce-plan` / `ce-work`.
+- `brainstorming`, `writing-plans`, `executing-plans`, `subagent-driven-development` — overlap with `ce-brainstorm` / `ce-plan` / `ce-work`.
 - `systematic-debugging` — overlap with `ce-debug`.
 - `using-git-worktrees` — overlap with `ce-worktree` (`ce-worktree` is preferred because it integrates with the rest of the `ce-*` pipeline).
 - `requesting-code-review`, `receiving-code-review` — overlap with `ce-code-review` / `ce-resolve-pr-feedback`.
