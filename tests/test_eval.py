@@ -1,6 +1,15 @@
 import pytest
 
-from reasonflow.eval import EvalConfig, HFTextDataset, InMemoryDataset
+from reasonflow.eval import (
+    AnswerExtractor,
+    ContainsMetric,
+    EvalConfig,
+    ExactMatchMetric,
+    HFTextDataset,
+    InMemoryDataset,
+    NumericMatchMetric,
+    get_metric,
+)
 
 
 def test_eval_config_defaults():
@@ -48,3 +57,47 @@ def test_hftext_dataset_maps_columns():
 
     ds2 = HFTextDataset(fake, problem_column="problem", answer_column="solution")
     assert ds2[1] == ("2", "3+3?", "6")
+
+
+def test_extract_answer_after_marker():
+    ext = AnswerExtractor()
+    assert ext.extract("The answer is #### 42 .") == "42"
+
+
+def test_extract_answer_falls_back_to_last_number():
+    ext = AnswerExtractor()
+    assert ext.extract("There are 35 chickens and 12 rabbits total 47.") == "47"
+
+
+def test_extract_answer_empty():
+    ext = AnswerExtractor()
+    assert ext.extract("") == ""
+
+
+def test_exact_match_metric():
+    m = ExactMatchMetric()
+    assert m.score("42", "42") == 1.0
+    assert m.score("42", " 42 ") == 1.0
+    assert m.score("42", "43") == 0.0
+
+
+def test_numeric_match_metric():
+    m = NumericMatchMetric()
+    assert m.score("42", "42") == 1.0
+    assert m.score("3.14", "3.140") == 1.0
+    assert m.score("1,000", "1000") == 1.0
+    assert m.score("42", "43") == 0.0
+
+
+def test_contains_metric():
+    m = ContainsMetric()
+    assert m.score("The answer is 42.", "42") == 1.0
+    assert m.score("42", "43") == 0.0
+
+
+def test_get_metric():
+    assert isinstance(get_metric("exact_match"), ExactMatchMetric)
+    assert isinstance(get_metric("numeric_match"), NumericMatchMetric)
+    assert isinstance(get_metric("contains"), ContainsMetric)
+    with pytest.raises(ValueError):
+        get_metric("unknown")
