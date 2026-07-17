@@ -148,7 +148,9 @@ class BranchGenerator:
                 use_cache=True,
                 output_hidden_states=True,
             )
-        self.asks.score_branch(branch_id, prefill_out.hidden_states)
+        asks_ok = self.asks.score_branch(branch_id, prefill_out.hidden_states)
+        if not asks_ok:
+            return self.generate_baseline_branch(problem, branch_id)
 
         if self.config.max_new_tokens == 0:
             generated_ids = suffix_ids.new_empty((1, 0))

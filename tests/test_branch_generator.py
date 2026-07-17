@@ -62,7 +62,7 @@ def test_generate_asks_reuses_prefix():
     decoder.continue_generate.assert_called_once()
 
 
-def test_generate_asks_continues_from_prefill():
+def test_generate_asks_rejected_uses_baseline():
     cfg = _config(max_new_tokens=3)
     model = MagicMock()
     prefill_out = MagicMock()
@@ -76,9 +76,11 @@ def test_generate_asks_continues_from_prefill():
     asks.score_branch.return_value = False
 
     decoder = MagicMock()
-    # Suffix has 2 tokens, generate 3 new tokens.
-    decoder.continue_generate.return_value = (
-        torch.tensor([[12, 13, 14]]),
+    # Baseline path tokenizes the full prompt to [[4, 5]] (2 tokens) and
+    # decodes from scratch; return a sequence longer than the prompt so the
+    # generated slice is non-empty.
+    decoder.decode.return_value = (
+        torch.tensor([[4, 5, 6, 7]]),
         0.7,
         MagicMock(),
     )
@@ -90,8 +92,8 @@ def test_generate_asks_continues_from_prefill():
     assert result.branch_id == 1
     assert result.generation_confidence == pytest.approx(0.7)
     asks.score_branch.assert_called_once()
-    decoder.continue_generate.assert_called_once()
-    decoder.decode.assert_not_called()
+    decoder.decode.assert_called_once()
+    decoder.continue_generate.assert_not_called()
 
 
 def test_generate_baseline_branch():
