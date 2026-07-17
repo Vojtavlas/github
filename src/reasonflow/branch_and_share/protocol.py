@@ -130,21 +130,23 @@ def _require_bool(data: Dict[str, Any], key: str, line_no: int, default: bool = 
     return value
 
 
-def _optional_str(data: Dict[str, Any], key: str) -> Optional[str]:
+def _optional_str(data: Dict[str, Any], key: str, line_no: int = 0) -> Optional[str]:
     value = data.get(key)
     if value is None:
         return None
     if not isinstance(value, str):
-        raise MalformedEventError(f"'{key}' must be a string or null")
+        raise MalformedEventError(f"'{key}' must be a string or null", line_no)
     return value
 
 
-def _optional_str_list(data: Dict[str, Any], key: str) -> Optional[List[str]]:
+def _optional_str_list(
+    data: Dict[str, Any], key: str, line_no: int = 0
+) -> Optional[List[str]]:
     value = data.get(key)
     if value is None:
         return None
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-        raise MalformedEventError(f"'{key}' must be a list of strings")
+        raise MalformedEventError(f"'{key}' must be a list of strings", line_no)
     return value
 
 
@@ -164,9 +166,15 @@ def _validate_event(data: Dict[str, Any], line_no: int = 0) -> Event:
     common = {"kind": kind, "line_no": line_no}
 
     if kind == "tool_call":
+        args = data.get("args")
+        if args is not None and not isinstance(args, dict):
+            raise MalformedEventError(
+                f"'args' must be a JSON object or null, got {type(args).__name__}",
+                line_no,
+            )
         return ToolCallEvent(
             name=_require_str(data, "name", line_no),
-            args=data.get("args"),
+            args=args,
             result=data.get("result"),
             failed=_require_bool(data, "failed", line_no, False),
             tokens=_require_int(data, "tokens", line_no, 0),
@@ -175,13 +183,13 @@ def _validate_event(data: Dict[str, Any], line_no: int = 0) -> Event:
     if kind == "file_read":
         return FileReadEvent(
             path=_require_str(data, "path", line_no),
-            symbols=_optional_str_list(data, "symbols"),
+            symbols=_optional_str_list(data, "symbols", line_no),
             **common,
         )
     if kind == "command":
         return CommandEvent(
             command=_require_str(data, "command", line_no),
-            output=_optional_str(data, "output") or "",
+            output=_optional_str(data, "output", line_no) or "",
             exit_code=_require_int(data, "exit_code", line_no, 0),
             **common,
         )
@@ -189,15 +197,15 @@ def _validate_event(data: Dict[str, Any], line_no: int = 0) -> Event:
         return TestEvent(
             name=_require_str(data, "name", line_no),
             passed=_require_bool(data, "passed", line_no, True),
-            output=_optional_str(data, "output") or "",
+            output=_optional_str(data, "output", line_no) or "",
             **common,
         )
     if kind == "file_change":
         return FileChangeEvent(
             path=_require_str(data, "path", line_no),
-            change_type=_optional_str(data, "change_type") or "modified",
-            old_hash=_optional_str(data, "old_hash"),
-            new_hash=_optional_str(data, "new_hash"),
+            change_type=_optional_str(data, "change_type", line_no) or "modified",
+            old_hash=_optional_str(data, "old_hash", line_no),
+            new_hash=_optional_str(data, "new_hash", line_no),
             **common,
         )
     if kind == "model_call":
@@ -215,7 +223,7 @@ def _validate_event(data: Dict[str, Any], line_no: int = 0) -> Event:
             description=_require_str(data, "description", line_no),
             action=_require_str(data, "action", line_no),
             expected_test_change=_require_str(data, "expected", line_no),
-            observed=_optional_str(data, "observed") or "",
+            observed=_optional_str(data, "observed", line_no) or "",
             failed=_require_bool(data, "failed", line_no, True),
             **common,
         )
@@ -233,7 +241,7 @@ def _validate_event(data: Dict[str, Any], line_no: int = 0) -> Event:
         return StatusEvent(
             status=status,
             result=data.get("result"),
-            error=_optional_str(data, "error") or "",
+            error=_optional_str(data, "error", line_no) or "",
             **common,
         )
 

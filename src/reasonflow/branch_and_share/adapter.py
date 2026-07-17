@@ -133,9 +133,8 @@ def _apply_event(event: Event, control: TrajectoryControl) -> Optional[Trajector
                     confidence=1.0,
                 )
             return TrajectoryOutcome(status=TrajectoryStatus.STAGNATION, report=report)
-        return TrajectoryOutcome(
-            status=TrajectoryStatus.SUCCESS,
-            result=event.result,
+        raise MalformedEventError(
+            f"Unrecognized status value: {event.status!r}", event.line_no
         )
     else:
         raise MalformedEventError(
@@ -303,6 +302,7 @@ class SubprocessPiAdapter(PiAdapter):
             reader_thread.start()
 
             deadline = time.time() + timeout
+            line_no = 0
             while True:
                 remaining = deadline - time.time()
                 if remaining <= 0.0:
@@ -325,12 +325,13 @@ class SubprocessPiAdapter(PiAdapter):
                 if line is None:
                     break
 
-                line = line.strip()
-                if not line:
+                line_no += 1
+                text = line.rstrip("\r\n")
+                if not text.strip():
                     continue
 
                 try:
-                    data = json.loads(line)
+                    data = json.loads(text)
                 except json.JSONDecodeError as exc:
                     outcome = TrajectoryOutcome(
                         status=TrajectoryStatus.ERROR,
@@ -339,7 +340,7 @@ class SubprocessPiAdapter(PiAdapter):
                     break
 
                 try:
-                    event = _validate_event(data)
+                    event = _validate_event(data, line_no)
                 except MalformedEventError as exc:
                     outcome = TrajectoryOutcome(
                         status=TrajectoryStatus.ERROR,
@@ -579,7 +580,7 @@ class MockPiAdapter(TrajectoryRunner):
             )
         elif kind == "discovery":
             control.record_discovery(step["text"])
-        elif kind == "tokens":
+        elif kind in ("token_usage", "tokens"):
             control.record_token_usage(step["n"])
         elif kind == "model_call":
             control.record_model_call(tokens=step.get("tokens", 0))
