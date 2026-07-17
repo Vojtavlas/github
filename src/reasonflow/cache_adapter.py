@@ -2,14 +2,25 @@
 
 import copy
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Sequence, Union
 
+import torch
 from transformers import DynamicCache
 
 
 def _validate_batch_size(batch_size: int) -> None:
     if batch_size <= 0:
         raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
+
+
+def _as_index_tensor(indices: Union[Sequence[int], torch.Tensor]) -> torch.Tensor:
+    if isinstance(indices, torch.Tensor):
+        idx = indices.to(dtype=torch.long)
+    else:
+        idx = torch.as_tensor(list(indices), dtype=torch.long)
+    if idx.dim() == 0:
+        idx = idx.unsqueeze(0)
+    return idx
 
 
 class CacheAdapter(ABC):
@@ -25,6 +36,11 @@ class CacheAdapter(ABC):
         """Return ``cache`` expanded from batch-1 to ``batch_size``."""
         ...
 
+    @abstractmethod
+    def select(self, cache: Any, indices: Union[Sequence[int], torch.Tensor]) -> Any:
+        """Return ``cache`` with only the batch rows in ``indices``."""
+        ...
+
 
 class _NoneCacheAdapter(CacheAdapter):
     """Adapter for ``None`` caches."""
@@ -34,6 +50,9 @@ class _NoneCacheAdapter(CacheAdapter):
 
     def expand(self, cache: Any, batch_size: int) -> Any:
         _validate_batch_size(batch_size)
+        return None
+
+    def select(self, cache: Any, indices: Union[Sequence[int], torch.Tensor]) -> Any:
         return None
 
 
@@ -96,6 +115,33 @@ class DynamicCacheAdapter(CacheAdapter):
             )
         return new_cache
 
+    def select(self, cache: Any, indices: Union[Sequence[int], torch.Tensor]) -> Any:
+        idx = _as_index_tensor(indices)
+
+        if hasattr(cache, "batch_select_indices"):
+            selected = self.clone(cache)
+            selected.batch_select_indices(idx)
+            return selected
+
+        if hasattr(cache, "key_cache") and hasattr(cache, "value_cache"):
+            selected = copy.deepcopy(cache)
+            selected.key_cache = [
+                k.index_select(0, idx) if k is not None else None for k in cache.key_cache
+            ]
+            selected.value_cache = [
+                v.index_select(0, idx) if v is not None else None for v in cache.value_cache
+            ]
+            return selected
+
+        new_cache = DynamicCache()
+        for layer_idx, (key_states, value_states, *_) in enumerate(cache):
+            new_cache.update(
+                key_states.index_select(0, idx),
+                value_states.index_select(0, idx),
+                layer_idx=layer_idx,
+            )
+        return new_cache
+
 
 class ModelSpecificCacheAdapter(CacheAdapter):
     """Adapter for model-specific cache subclasses with ``key_cache``/``value_cache``."""
@@ -131,6 +177,21 @@ class ModelSpecificCacheAdapter(CacheAdapter):
         ]
         return expanded
 
+    def select(self, cache: Any, indices: Union[Sequence[int], torch.Tensor]) -> Any:
+        idx = _as_index_tensor(indices)
+        if hasattr(cache, "batch_select_indices"):
+            selected = self.clone(cache)
+            selected.batch_select_indices(idx)
+            return selected
+        selected = copy.deepcopy(cache)
+        selected.key_cache = [
+            k.index_select(0, idx) if k is not None else None for k in cache.key_cache
+        ]
+        selected.value_cache = [
+            v.index_select(0, idx) if v is not None else None for v in cache.value_cache
+        ]
+        return selected
+
 
 class IterableCacheAdapter(CacheAdapter):
     """Adapter for older iterable cache objects with ``update`` and ``__iter__``.
@@ -159,6 +220,17 @@ class IterableCacheAdapter(CacheAdapter):
             )
         return new_cache
 
+    def select(self, cache: Any, indices: Union[Sequence[int], torch.Tensor]) -> Any:
+        idx = _as_index_tensor(indices)
+        new_cache = DynamicCache()
+        for layer_idx, (key_states, value_states, *_) in enumerate(cache):
+            new_cache.update(
+                key_states.index_select(0, idx),
+                value_states.index_select(0, idx),
+                layer_idx=layer_idx,
+            )
+        return new_cache
+
 
 class LegacyTupleCacheAdapter(CacheAdapter):
     """Adapter for legacy tuple caches: ``tuple`` of ``(key, value)`` tensors."""
@@ -176,6 +248,13 @@ class LegacyTupleCacheAdapter(CacheAdapter):
                 key_states.repeat_interleave(batch_size, dim=0),
                 value_states.repeat_interleave(batch_size, dim=0),
             )
+            for key_states, value_states in cache
+        )
+
+    def select(self, cache: Any, indices: Union[Sequence[int], torch.Tensor]) -> Any:
+        idx = _as_index_tensor(indices)
+        return tuple(
+            (key_states.index_select(0, idx), value_states.index_select(0, idx))
             for key_states, value_states in cache
         )
 
@@ -214,6 +293,18 @@ def expand_kv(pkv: Any, batch_size: int) -> Any:
     return get_cache_adapter(pkv).expand(pkv, batch_size)
 
 
+def select_kv_cache_rows(
+    pkv: Any, indices: Union[Sequence[int], torch.Tensor]
+) -> Any:
+    """Return a KV cache containing only the batch rows in ``indices``.
+
+    The returned cache is the same format as ``pkv`` (or ``DynamicCache`` for
+    iterable caches that cannot be selected in place) and shares no storage
+    with the original. ``None`` caches return ``None``.
+    """
+    return get_cache_adapter(pkv).select(pkv, indices)
+
+
 __all__ = [
     "CacheAdapter",
     "DynamicCacheAdapter",
@@ -223,4 +314,5 @@ __all__ = [
     "get_cache_adapter",
     "clone_kv_cache",
     "expand_kv",
+    "select_kv_cache_rows",
 ]

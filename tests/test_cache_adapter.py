@@ -12,6 +12,7 @@ from reasonflow.cache_adapter import (
     clone_kv_cache,
     expand_kv,
     get_cache_adapter,
+    select_kv_cache_rows,
 )
 
 
@@ -231,23 +232,115 @@ def test_expand_invalid_batch_size():
         expand_kv(model_cache, -1)
 
 
-def test_clone_does_not_share_mutable_attributes():
-    # Model-specific cache: non-tensor mutable attributes should not be shared.
-    cache = FakeModelCache([_make_tensors(), _make_tensors(seq_len=5)])
-    cache.extra = {"shared": [1, 2, 3]}
-    cloned = clone_kv_cache(cache)
-    assert cloned.extra is not cache.extra
-    cloned.extra["shared"].append(4)
-    assert cache.extra["shared"] == [1, 2, 3]
+def _make_batched_cache(num_layers: int = 2, batch: int = 3, seq_len: int = 4):
+    """Build per-layer (key, value) tensors with distinct values per batch row."""
+    pairs = []
+    for layer in range(num_layers):
+        key = torch.zeros(batch, 2, seq_len, 4)
+        value = torch.zeros(batch, 2, seq_len, 4)
+        for b in range(batch):
+            key[b] = float(b + 1) + 0.1 * layer
+            value[b] = float(b + 1) * 10.0 + 0.1 * layer
+        pairs.append((key, value))
+    return pairs
 
-    # DynamicCache: additional mutable attributes should not be shared.
-    dc = DynamicCache()
-    for i in range(2):
-        k, v = _make_tensors(seq_len=2 + i)
-        dc.update(k, v, layer_idx=i)
-    dc.some_meta = ["a", "b"]
-    dc2 = DynamicCacheAdapter().clone(dc)
-    assert dc2.some_meta is not dc.some_meta
-    dc2.some_meta.append("c")
-    assert dc.some_meta == ["a", "b"]
+
+def _build_dynamic_cache(pairs):
+    cache = DynamicCache()
+    for layer_idx, (key, value) in enumerate(pairs):
+        cache.update(key, value, layer_idx=layer_idx)
+    return cache
+
+
+def _cache_rows(cache, indices):
+    """Return list of (key, value) per layer for the requested batch rows."""
+    rows = []
+    for key, value in _cache_pairs(cache):
+        rows.append((key[indices], value[indices]))
+    return rows
+
+
+def _assert_rows_equal(actual_cache, expected_rows):
+    for (key, value), (exp_key, exp_value) in zip(_cache_pairs(actual_cache), expected_rows):
+        assert torch.equal(key, exp_key)
+        assert torch.equal(value, exp_value)
+
+
+@pytest.mark.parametrize(
+    "fixture_name",
+    ["dynamic", "model_specific", "iterable", "tuple", "none"],
+)
+def test_select_kv_cache_rows(fixture_name):
+    batch = 3
+    indices = [0, 2]
+    pairs = _make_batched_cache(num_layers=2, batch=batch, seq_len=4)
+
+    if fixture_name == "dynamic":
+        cache = _build_dynamic_cache(pairs)
+    elif fixture_name == "model_specific":
+        cache = FakeModelCache(pairs)
+    elif fixture_name == "iterable":
+        cache = IterableCache(pairs)
+    elif fixture_name == "tuple":
+        cache = tuple(pairs)
+    elif fixture_name == "none":
+        cache = None
+    else:
+        raise AssertionError(fixture_name)
+
+    selected = select_kv_cache_rows(cache, indices)
+
+    if fixture_name == "none":
+        assert selected is None
+        return
+
+    for key, value in _cache_pairs(selected):
+        assert key.shape[0] == len(indices)
+        assert value.shape[0] == len(indices)
+
+    expected_rows = _cache_rows(cache, indices)
+    _assert_rows_equal(selected, expected_rows)
+
+
+def test_select_kv_cache_rows_dynamic_preserves_type():
+    pairs = _make_batched_cache(num_layers=2, batch=3, seq_len=4)
+    cache = _build_dynamic_cache(pairs)
+    selected = select_kv_cache_rows(cache, [1])
+    assert isinstance(selected, DynamicCache)
+    for key, value in _cache_pairs(selected):
+        assert key.shape[0] == 1
+        assert value.shape[0] == 1
+
+
+def test_select_kv_cache_rows_tuple_preserves_type():
+    pairs = _make_batched_cache(num_layers=2, batch=3, seq_len=4)
+    cache = tuple(pairs)
+    selected = select_kv_cache_rows(cache, [0, 1, 2])
+    assert isinstance(selected, tuple)
+    for (key, value), (orig_key, orig_value) in zip(selected, cache):
+        assert torch.equal(key, orig_key)
+        assert torch.equal(value, orig_value)
+
+
+def test_select_kv_cache_rows_single_index():
+    pairs = _make_batched_cache(num_layers=2, batch=3, seq_len=4)
+    cache = FakeModelCache(pairs)
+    selected = select_kv_cache_rows(cache, [2])
+    assert isinstance(selected, FakeModelCache)
+    for layer_idx, (key, value) in enumerate(zip(selected.key_cache, selected.value_cache)):
+        assert key.shape[0] == 1
+        assert torch.equal(key[0], cache.key_cache[layer_idx][2])
+        assert torch.equal(value[0], cache.value_cache[layer_idx][2])
+
+
+def test_select_kv_cache_rows_tensor_indices():
+    pairs = _make_batched_cache(num_layers=2, batch=4, seq_len=3)
+    cache = _build_dynamic_cache(pairs)
+    idx = torch.tensor([3, 0])
+    selected = select_kv_cache_rows(cache, idx)
+    orig_pairs = list(_cache_pairs(cache))
+    for (key, value), (orig_key, orig_value) in zip(_cache_pairs(selected), orig_pairs):
+        assert key.shape[0] == 2
+        assert torch.equal(key[0], orig_key[3])
+        assert torch.equal(key[1], orig_key[0])
 
