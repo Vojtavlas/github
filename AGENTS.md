@@ -27,6 +27,14 @@
 
 The public API lives in `src/reasonflow/__init__.py` and the main entry point is `MultiBranchEngine.solve()`.
 
+## AGENTS.md hierarchy
+
+This root file is the single source of truth for cross-repo conventions. Subsystem details live in child AGENTS.md files:
+
+- `src/reasonflow/AGENTS.md` — core RKSC inference engine modules.
+- `src/reasonflow/branch_and_share/AGENTS.md` — Pi coding-agent branching and sharing layer.
+- `tests/AGENTS.md` — test conventions and coverage map.
+
 ## Domain model
 
 | Component | Responsibility |
@@ -94,13 +102,14 @@ src/reasonflow/
   branch_generator.py      Branch generation with ASKS gating
   results.py               BranchResult, SolveResult dataclasses
   metrics.py               Speedup helpers
+docs/
+  branch_and_share.md    JSON event protocol, custom PiAdapter guide, branching/seeding, and logging/reporting
+
 examples/
   simple_demo.py           Single-problem RKSC vs baseline demo
   benchmark_demo.py        Multi-problem benchmark
   branch_and_share_demo.py End-to-end branch_and_share demo with git worktrees and a subprocess agent
   pi_agent_stream.py       Streaming demo that tails a live JSONL event log
-  docs/
-    branch_and_share.md    JSON event protocol, custom PiAdapter guide, branching/seeding, and logging/reporting
 
 tests/
   test_asks.py
@@ -167,7 +176,7 @@ Use `ce-worktree` (preferred) or `using-git-worktrees` when starting isolated fe
 - `pytest` with tests named `test_*.py`.
 - Engine integration tests in `test_engine.py` load `Qwen/Qwen3.5-0.8B` and are skipped when `SKIP_ENGINE_TESTS=1`.
 - Prefer real code over mocks unless unavoidable.
-The current baseline is: `ruff check src tests examples` clean; `SKIP_ENGINE_TESTS=1 py -3.11 -m pytest -q` reports `221 passed, 4 skipped`; a full run `py -3.11 -m pytest -q` reports `225 passed`.
+The current baseline is: `ruff check src tests examples` clean; `SKIP_ENGINE_TESTS=1 py -3.11 -m pytest -q` reports `241 passed, 4 skipped`; a full run `py -3.11 -m pytest -q` reports `240 passed, 5 skipped`.
 
 ## Benchmark conventions
 
@@ -180,6 +189,10 @@ The current baseline is: `ruff check src tests examples` clean; `SKIP_ENGINE_TES
   - Mean RKSC: 3042.3 ms
   - Mean baseline: 3635.7 ms
   - Speedup: 1.20x
+- Current measurement (local CUDA, Qwen 0.8B, `max_new_tokens=32`, 3 runs, 1 warmup):
+  - Mean RKSC: 3662.1 ms
+  - Mean baseline: 3618.7 ms
+  - Speedup: 0.99x
 
 ## Skill map: what to use and when
 
@@ -255,6 +268,33 @@ Each agent returns: (1) the file's single responsibility, (2) its main classes/f
 ### Skill note
 
 `dispatching-parallel-agents` is the recommended skill for ad-hoc parallel dispatch of independent exploration, debugging, or verification tasks. `ce-work` already handles parallel subagents when executing an implementation plan, so do not double-dispatch the same work.
+
+## Anti-patterns
+
+- Do not let `RSBCMManager` temporarily hold more blocks than `max_blocks`; evict before allocating.
+- Do not remove the catch-all safety net in `model_adapter.py`; the heuristic adapter is the default fallback.
+- Do not assume `MultiBranchEngine` is importable in every worktree; it is guarded by a conditional `try/except`.
+- Do not delete failing tests just to make a suite pass.
+- Do not double-dispatch the same work through both `ce-work` and `dispatching-parallel-agents`.
+- Do not paste large agent outputs back into the main context; hand off artifacts as files.
+- Do not claim a task is done/fixed/passing without running the verification commands and reading the output.
+
+## Unique styles
+
+- Two subsystems share one package: `reasonflow` (RKSC LLM inference) and `reasonflow.branch_and_share` (Pi agent branching). They have separate public APIs and separate test suites.
+- Agent-oriented docs live at the repo root (`AGENTS.md`, `CONTEXT.md`, `TASKS.md`) and are the authoritative spec; `README.md` is public-facing and can be stale.
+- Subagent-first execution is the default for any non-trivial work; inline edits are reserved for one-liners.
+- Tests are split flat in `tests/` with dedicated `*_adversarial.py`, `*_integration.py`, `*_stream.py`, `*_subprocess.py`, `*_tail.py`, and `*_logging.py` files for the branch_and_share subsystem.
+- `.worktrees/` under `.gitignore` is the preferred isolation mechanism for feature work.
+
+## Notes
+
+- The default `python`/`pytest` in this environment routes to a Hermes venv without `torch`; use `py -3.11` for all dev commands.
+- `README.md`'s `Project structure` section is stale (it omits `branch_and_share/`, `cache_adapter.py`, `model_adapter.py`, `verifier.py`, `branch_generator.py`, `decoder.py`, `sampler.py`, `results.py`); trust `AGENTS.md`.
+- The `.codegraph/` index is present but inactive in this session; rely on `glob`/`grep`/`read` and the subagent reports.
+- `.worktrees/` is documented in AGENTS.md but does not currently exist on disk (worktrees likely pruned or on another branch).
+- `.reasonflow/sessions/` is created on demand by `BranchSessionLogger`.
+- Engine integration tests download `Qwen/Qwen3.5-0.8B` from Hugging Face Hub; set `HF_TOKEN` for higher rate limits and use `SKIP_ENGINE_TESTS=1` to skip them.
 
 ## When to update this file
 

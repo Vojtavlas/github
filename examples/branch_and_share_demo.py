@@ -90,11 +90,11 @@ def _cleanup_worktrees(repo: Path) -> None:
         if wt.exists():
             try:
                 _git(repo, "worktree", "remove", "--force", str(wt), check=False)
-            except Exception:
+            except (OSError, subprocess.SubprocessError):
                 pass
         try:
             _git(repo, "branch", "-D", f"rf-attempt-{i}", check=False)
-        except Exception:
+        except (OSError, subprocess.SubprocessError):
             pass
 
 

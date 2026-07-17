@@ -13,10 +13,9 @@ emits JSONL events to ``stdout`` with small realistic delays:
 import json
 import os
 import time
-from typing import Any, Dict
 
 
-def emit(event: Dict[str, Any]) -> None:
+def emit(event: dict) -> None:
     print(json.dumps(event), flush=True)
     time.sleep(0.02)
 
