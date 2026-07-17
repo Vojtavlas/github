@@ -117,3 +117,42 @@ def test_asks_dissimilar_branch_is_rejected():
     asks.capture_root(None, root_hs)
     branch_hs = [torch.randn_like(h) for h in root_hs]
     assert asks.score_branch(0, branch_hs) is False
+
+
+def test_score_branches_partitions_rows():
+    cfg = RKSCConfig(tau=0.5)
+    asks = ASKSManager(cfg, {})
+    root_hs = make_hidden_states()
+    asks.capture_root(None, root_hs)
+
+    B = 3
+    layers = 4
+    hidden = 16
+    batched_hs = [torch.randn(B, 5, hidden) for _ in range(layers)]
+
+    calls = []
+
+    def fake_score_branch(branch_id, branch_hidden):
+        calls.append((branch_id, branch_hidden))
+        return branch_id % 2 == 0
+
+    asks.score_branch = fake_score_branch
+
+    branch_ids = [0, 1, 2]
+    result = asks.score_branches(branch_ids, batched_hs)
+
+    assert result == {0: True, 1: False, 2: True}
+    assert len(calls) == 3
+    for branch_id, branch_hidden in calls:
+        assert len(branch_hidden) == layers
+        for h in branch_hidden:
+            assert h.shape == (1, 5, hidden)
+
+
+def test_score_branches_empty_hidden_states_returns_all_false():
+    cfg = RKSCConfig(tau=0.5)
+    asks = ASKSManager(cfg, {})
+    asks.capture_root(None, make_hidden_states())
+
+    result = asks.score_branches([0, 1], [])
+    assert result == {0: False, 1: False}

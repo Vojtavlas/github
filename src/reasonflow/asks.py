@@ -144,11 +144,30 @@ class ASKSManager:
         self.records[branch_id] = reuse
         return reuse
 
-    def get_root_kv(self, branch_id: int) -> Optional[object]:
-        """Return cached KV for this branch if the gate allowed reuse."""
-        if self.records.get(branch_id) and self.root_kv is not None:
-            return self.root_kv
-        return None
+    def score_branches(
+        self,
+        branch_ids: List[int],
+        batched_hidden_states: List[torch.Tensor],
+    ) -> Dict[int, bool]:
+        """Score a batch of branches produced by one batched prefill forward.
+
+        Args:
+            branch_ids: One identifier per batch row, in row order.
+            batched_hidden_states: Per-layer hidden states with shape
+                ``[B, seq, hidden]`` each, as returned by a model forward with
+                ``output_hidden_states=True``.
+
+        Returns:
+            Mapping from branch id to ASKS reuse verdict. When
+            ``batched_hidden_states`` is empty, every branch is rejected.
+        """
+        if not batched_hidden_states:
+            return {bid: False for bid in branch_ids}
+        verdicts: Dict[int, bool] = {}
+        for b, branch_id in enumerate(branch_ids):
+            row_hidden = [layer[b : b + 1] for layer in batched_hidden_states]
+            verdicts[branch_id] = self.score_branch(branch_id, row_hidden)
+        return verdicts
 
     def reset(self):
         self.root_hidden = None
