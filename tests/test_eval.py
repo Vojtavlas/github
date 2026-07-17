@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import pytest
 
 from reasonflow.eval import (
@@ -6,6 +8,7 @@ from reasonflow.eval import (
     EvalConfig,
     EvalReport,
     EvalResult,
+    Evaluator,
     ExactMatchMetric,
     HFTextDataset,
     InMemoryDataset,
@@ -158,3 +161,35 @@ def test_eval_report_save_json(tmp_path):
     assert data["accuracy"] == 1.0
     assert data["speedup"] == 1.2
     assert len(data["results"]) == 1
+
+
+def test_evaluator_runs_offline():
+    engine = MagicMock()
+
+    def _make_result(text, ms):
+        r = MagicMock()
+        r.best_text = text
+        r.total_time_ms = ms
+        return r
+
+    engine.solve.side_effect = [
+        _make_result("#### 4", 100.0),
+        _make_result("#### 6", 100.0),
+    ]
+    engine.baseline_solve.side_effect = [
+        _make_result("#### 4", 120.0),
+        _make_result("#### 6", 120.0),
+    ]
+
+    cfg = EvalConfig(max_problems=2, metric="exact_match")
+    evaluator = Evaluator(engine, cfg)
+    dataset = InMemoryDataset(
+        [("1", "2+2?", "4"), ("2", "3+3?", "6")]
+    )
+    report = evaluator.run(dataset)
+
+    assert report.accuracy == 1.0
+    assert report.baseline_accuracy == 1.0
+    assert report.speedup == 240.0 / 200.0
+    assert engine.solve.call_count == 2
+    assert engine.baseline_solve.call_count == 2

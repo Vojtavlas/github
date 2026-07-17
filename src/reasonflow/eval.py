@@ -229,6 +229,55 @@ class EvalReport:
                 writer.writerow(asdict(r))
 
 
+class Evaluator:
+    """Run a model on a dataset and produce an accuracy/speedup report."""
+
+    def __init__(self, engine: Any, config: Optional[EvalConfig] = None) -> None:
+        self.engine = engine
+        self.config = config or EvalConfig()
+        self.extractor = AnswerExtractor(self.config.answer_markers)
+        self.metric = get_metric(self.config.metric)
+
+    def run(self, dataset: Dataset) -> EvalReport:
+        """Evaluate ``engine`` over ``dataset`` and return an ``EvalReport``."""
+        from tqdm import tqdm
+
+        results: List[EvalResult] = []
+        max_problems = self.config.max_problems
+        size = len(dataset)
+        if max_problems is not None and max_problems > 0:
+            size = min(size, max_problems)
+
+        iterator = tqdm(range(size), desc="Evaluating", unit="problem")
+        for idx in iterator:
+            problem_id, problem, gold = dataset[idx]
+
+            rksc_result = self.engine.solve(problem)
+            baseline_result = self.engine.baseline_solve(problem)
+
+            rksc_pred = self.extractor.extract(rksc_result.best_text)
+            baseline_pred = self.extractor.extract(baseline_result.best_text)
+
+            rksc_score = self.metric.score(rksc_pred, gold)
+            baseline_score = self.metric.score(baseline_pred, gold)
+
+            results.append(
+                EvalResult(
+                    problem_id=str(problem_id),
+                    problem=problem,
+                    gold=gold,
+                    rksc_prediction=rksc_pred,
+                    baseline_prediction=baseline_pred,
+                    rksc_score=rksc_score,
+                    baseline_score=baseline_score,
+                    rksc_ms=rksc_result.total_time_ms,
+                    baseline_ms=baseline_result.total_time_ms,
+                )
+            )
+
+        return EvalReport.from_results(results)
+
+
 class HFTextDataset:
     """Wrap a Hugging Face ``datasets.Dataset`` with column name mapping."""
 
