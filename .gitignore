@@ -35,3 +35,6 @@ Thumbs.db
 
 # Agent worktrees
 .worktrees/
+
+# Agent scratch / OMO plans
+.omo/

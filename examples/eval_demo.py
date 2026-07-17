@@ -10,7 +10,7 @@ from reasonflow.eval import Evaluator, HFTextDataset
 def main():
     parser = argparse.ArgumentParser(description="Evaluate ReasonFlow on a reasoning dataset.")
     parser.add_argument("--model", default="Qwen/Qwen3.5-0.8B")
-    parser.add_argument("--dataset", default="gsm8k")
+    parser.add_argument("--dataset", default="openai/gsm8k")
     parser.add_argument("--dataset-config", default="main")
     parser.add_argument("--split", default="test")
     parser.add_argument("--max-problems", type=int, default=10)
@@ -19,6 +19,9 @@ def main():
     parser.add_argument("--branching-factor", type=int, default=2)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--warmup", type=int, default=1)
+    parser.add_argument("--runs", type=int, default=3)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-json", default="eval_report.json")
     parser.add_argument("--output-csv", default=None)
     args = parser.parse_args()
@@ -36,6 +39,9 @@ def main():
         max_problems=args.max_problems,
         metric=args.metric,
         split=args.split,
+        warmup=args.warmup,
+        runs=args.runs,
+        seed=args.seed,
     )
     dataset = HFTextDataset.from_name(
         args.dataset,
@@ -48,9 +54,10 @@ def main():
 
     evaluator = Evaluator(engine, eval_cfg)
     report = evaluator.run(dataset)
+    speedup_str = f"{report.speedup:.2f}x" if report.speedup is not None else "N/A"
     print(f"Accuracy:     {report.accuracy:.3f}")
     print(f"Baseline acc: {report.baseline_accuracy:.3f}")
-    print(f"Speedup:      {report.speedup:.2f}x")
+    print(f"Speedup:      {speedup_str}")
     print(f"RKSC ms:      {report.rksc_ms:.1f}")
     print(f"Baseline ms:  {report.baseline_ms:.1f}")
 

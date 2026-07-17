@@ -2,6 +2,7 @@
 
 import csv
 import json
+import math
 import re
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
@@ -15,10 +16,13 @@ class EvalConfig:
     max_problems: Optional[int] = None
     metric: str = "exact_match"
     split: str = "test"
-    answer_markers: Tuple[str, ...] = ("####", "Answer:", "answer is", "ANSWER:")
+    answer_markers: Tuple[str, ...] = ("####", "Answer:", "ANSWER:")
     output_json: Optional[str] = None
     output_csv: Optional[str] = None
     seed: int = 42
+    warmup: int = 1
+    runs: int = 3
+    extract_gold: bool = True
 
 
 class Dataset(Protocol):
@@ -45,13 +49,13 @@ class InMemoryDataset:
 
 
 class AnswerExtractor:
-    """Extract a final answer string from generated text."""
+    """Extract a final answer string from generated or gold text."""
 
     def __init__(
         self,
         markers: Optional[Tuple[str, ...]] = None,
     ) -> None:
-        self.markers = markers or ("####", "Answer:", "answer is", "ANSWER:")
+        self.markers = markers or ("####", "Answer:", "ANSWER:")
 
     def extract(self, text: str) -> str:
         """Return the cleaned answer string."""
@@ -59,20 +63,27 @@ class AnswerExtractor:
         if not text:
             return ""
 
-        best = ""
+        # Try explicit markers (last occurrence, case-insensitive).
         for marker in self.markers:
-            if marker in text:
-                tail = text.split(marker)[-1]
-                best = self._clean(tail)
-                if best:
-                    break
-        if best:
-            return best
+            extracted = self._extract_after_marker(text, marker)
+            if extracted:
+                cleaned = self._clean(extracted)
+                if cleaned:
+                    return cleaned
 
-        boxed = re.search(r"\\boxed\{([^}]+)\}", text)
-        if boxed:
-            return self._clean(boxed.group(1))
+        # Try \boxed{...} with nested braces.
+        boxed = self._extract_boxed(text)
+        if boxed is not None:
+            cleaned = self._clean(self._parse_latex_boxed(boxed))
+            if cleaned:
+                return cleaned
 
+        # Try \frac{a}{b} outside a box.
+        frac = self._parse_frac(text)
+        if frac is not None:
+            return frac
+
+        # Last number fallback.
         numbers = re.findall(r"-?\d+(?:,\d{3})*(?:\.\d+)?", text)
         if numbers:
             return self._clean(numbers[-1])
@@ -80,8 +91,53 @@ class AnswerExtractor:
         return self._clean(text)
 
     @staticmethod
+    def _extract_after_marker(text: str, marker: str) -> Optional[str]:
+        """Return text after the last case-insensitive occurrence of marker."""
+        lower_text = text.lower()
+        lower_marker = marker.lower()
+        pos = lower_text.rfind(lower_marker)
+        if pos == -1:
+            return None
+        return text[pos + len(marker) :]
+
+    @staticmethod
+    def _extract_boxed(text: str) -> Optional[str]:
+        """Extract the contents of the outermost \boxed{...}, handling one nesting level."""
+        start = text.find("\\boxed{")
+        if start == -1:
+            return None
+        depth = 0
+        content_start = start + len("\\boxed{")
+        for i in range(content_start, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                if depth == 0:
+                    return text[content_start:i]
+                depth -= 1
+        return None
+
+    @classmethod
+    def _parse_latex_boxed(cls, text: str) -> str:
+        """Clean LaTeX inside a box and return a parseable string."""
+        # Handle \frac{a}{b} inside the box.
+        frac = cls._parse_frac(text)
+        if frac is not None:
+            return frac
+        return text
+
+    @staticmethod
+    def _parse_frac(text: str) -> Optional[str]:
+        """Convert a simple \\frac{a}{b} to 'a/b' for numeric parsing."""
+        match = re.search(r"\\frac\{([^}]+)\}\{([^}]+)\}", text)
+        if match:
+            return f"{match.group(1)}/{match.group(2)}"
+        return None
+
+    @staticmethod
     def _clean(text: str) -> str:
         text = text.strip()
+        # Remove trailing sentence punctuation.
         text = re.sub(r"[.,;:!?]+$", "", text)
         return text.strip()
 
@@ -98,6 +154,10 @@ class ExactMatchMetric(Metric):
     """Case-insensitive, whitespace-normalized exact match."""
 
     def score(self, prediction: str, gold: str) -> float:
+        if not gold.strip() and not prediction.strip():
+            return 1.0
+        if not gold.strip() or not prediction.strip():
+            return 0.0
         return 1.0 if self._normalize(prediction) == self._normalize(gold) else 0.0
 
     @staticmethod
@@ -117,8 +177,6 @@ class NumericMatchMetric(Metric):
         gold_num = self._parse(gold)
         if pred_num is None or gold_num is None:
             return ExactMatchMetric().score(prediction, gold)
-        import math
-
         return (
             1.0
             if math.isclose(pred_num, gold_num, rel_tol=self.rel_tol, abs_tol=self.abs_tol)
@@ -130,14 +188,21 @@ class NumericMatchMetric(Metric):
         text = text.strip()
         text = text.replace(",", "")
         text = text.replace("$", "")
-        text = text.replace("%", "")
         text = re.sub(r"\s+", "", text)
+
+        has_percent = "%" in text
+        text = text.replace("%", "")
+
         try:
             if "/" in text:
                 from fractions import Fraction
 
-                return float(Fraction(text))
-            return float(text)
+                value = float(Fraction(text))
+            else:
+                value = float(text)
+            if has_percent and "/" not in text:
+                value /= 100.0
+            return value
         except (ValueError, ZeroDivisionError):
             return None
 
@@ -146,6 +211,8 @@ class ContainsMetric(Metric):
     """Check if the normalized prediction contains the normalized gold answer."""
 
     def score(self, prediction: str, gold: str) -> float:
+        if not gold.strip():
+            return 0.0 if prediction.strip() else 1.0
         return 1.0 if self._normalize(gold) in self._normalize(prediction) else 0.0
 
     @staticmethod
@@ -177,13 +244,14 @@ class EvalResult:
     baseline_score: float
     rksc_ms: float
     baseline_ms: float
+    error: Optional[str] = None
 
 
 @dataclass
 class EvalReport:
     accuracy: float
     baseline_accuracy: float
-    speedup: float
+    speedup: Optional[float]
     rksc_ms: float
     baseline_ms: float
     results: List[EvalResult]
@@ -194,7 +262,7 @@ class EvalReport:
             return cls(
                 accuracy=0.0,
                 baseline_accuracy=0.0,
-                speedup=1.0,
+                speedup=None,
                 rksc_ms=0.0,
                 baseline_ms=0.0,
                 results=[],
@@ -203,7 +271,7 @@ class EvalReport:
         baseline_scores = [r.baseline_score for r in results]
         total_rksc = sum(r.rksc_ms for r in results)
         total_baseline = sum(r.baseline_ms for r in results)
-        speedup = total_baseline / total_rksc if total_rksc > 0 else float("nan")
+        speedup = total_baseline / total_rksc if total_rksc > 0 else None
         return cls(
             accuracy=sum(rksc_scores) / len(rksc_scores),
             baseline_accuracy=sum(baseline_scores) / len(baseline_scores),
@@ -222,8 +290,8 @@ class EvalReport:
             "baseline_ms": self.baseline_ms,
             "results": [asdict(r) for r in self.results],
         }
-        with open(path, "w") as f:
-            json.dump(data, f, indent=2)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, allow_nan=False)
 
     def save_csv(self, path: str) -> None:
         fieldnames = [
@@ -236,8 +304,9 @@ class EvalReport:
             "baseline_score",
             "rksc_ms",
             "baseline_ms",
+            "error",
         ]
-        with open(path, "w", newline="") as f:
+        with open(path, "w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for r in self.results:
@@ -253,6 +322,55 @@ class Evaluator:
         self.extractor = AnswerExtractor(self.config.answer_markers)
         self.metric = get_metric(self.config.metric)
 
+    def _extract(self, text: str) -> str:
+        return self.extractor.extract(text)
+
+    def _timed(self, problem: str, idx: int, mode: str) -> Tuple[str, float]:
+        """Run ``mode`` (``solve`` or ``baseline_solve``) with warmup + repeats.
+
+        Returns a representative answer string and the mean reported time in ms.
+        """
+        import torch
+
+        method = getattr(self.engine, mode)
+        warmup = max(0, self.config.warmup)
+        runs = max(1, self.config.runs)
+
+        # Warmup runs are discarded.
+        for w in range(warmup):
+            torch.manual_seed(self.config.seed + idx * 1000 + w)
+            method(problem)
+
+        times: List[float] = []
+        texts: List[str] = []
+        for r in range(runs):
+            torch.manual_seed(self.config.seed + idx * 1000 + warmup + r)
+            result = method(problem)
+            times.append(float(getattr(result, "total_time_ms", 0.0)))
+            texts.append(getattr(result, "best_text", ""))
+
+        # For temperature=0 all texts should agree; use the last one.
+        return texts[-1], sum(times) / len(times)
+
+    def _run_pair(
+        self, problem: str, idx: int
+    ) -> Tuple[Optional[str], Optional[float], Optional[str], Optional[float], Optional[str]]:
+        """Run RKSC and baseline with alternating order to reduce cache bias.
+
+        Returns (rksc_text, rksc_ms, baseline_text, baseline_ms, error).
+        """
+        order = "rksc_first" if idx % 2 == 0 else "baseline_first"
+        try:
+            if order == "rksc_first":
+                rksc_text, rksc_ms = self._timed(problem, idx, "solve")
+                baseline_text, baseline_ms = self._timed(problem, idx, "baseline_solve")
+            else:
+                baseline_text, baseline_ms = self._timed(problem, idx, "baseline_solve")
+                rksc_text, rksc_ms = self._timed(problem, idx, "solve")
+        except Exception as exc:
+            return None, None, None, None, str(exc)
+        return rksc_text, rksc_ms, baseline_text, baseline_ms, None
+
     def run(self, dataset: Dataset) -> EvalReport:
         """Evaluate ``engine`` over ``dataset`` and return an ``EvalReport``."""
         from tqdm import tqdm
@@ -265,13 +383,30 @@ class Evaluator:
 
         iterator = tqdm(range(size), desc="Evaluating", unit="problem")
         for idx in iterator:
-            problem_id, problem, gold = dataset[idx]
+            problem_id, problem, raw_gold = dataset[idx]
+            gold = self._extract(raw_gold) if self.config.extract_gold else raw_gold
 
-            rksc_result = self.engine.solve(problem)
-            baseline_result = self.engine.baseline_solve(problem)
+            rksc_text, rksc_ms, baseline_text, baseline_ms, error = self._run_pair(problem, idx)
 
-            rksc_pred = self.extractor.extract(rksc_result.best_text)
-            baseline_pred = self.extractor.extract(baseline_result.best_text)
+            if error is not None:
+                results.append(
+                    EvalResult(
+                        problem_id=str(problem_id),
+                        problem=problem,
+                        gold=gold,
+                        rksc_prediction="",
+                        baseline_prediction="",
+                        rksc_score=0.0,
+                        baseline_score=0.0,
+                        rksc_ms=0.0,
+                        baseline_ms=0.0,
+                        error=error,
+                    )
+                )
+                continue
+
+            rksc_pred = self._extract(rksc_text) if rksc_text is not None else ""
+            baseline_pred = self._extract(baseline_text) if baseline_text is not None else ""
 
             rksc_score = self.metric.score(rksc_pred, gold)
             baseline_score = self.metric.score(baseline_pred, gold)
@@ -285,8 +420,8 @@ class Evaluator:
                     baseline_prediction=baseline_pred,
                     rksc_score=rksc_score,
                     baseline_score=baseline_score,
-                    rksc_ms=rksc_result.total_time_ms,
-                    baseline_ms=baseline_result.total_time_ms,
+                    rksc_ms=rksc_ms if rksc_ms is not None else 0.0,
+                    baseline_ms=baseline_ms if baseline_ms is not None else 0.0,
                 )
             )
 

@@ -17,6 +17,7 @@
 | Autoregressive decoding | `decoder.py` / `sampler.py` | `Decoder`, `Sampler` |
 | Verification scoring | `verifier.py` | `Verifier` |
 | Result dataclasses | `results.py` | `BranchResult`, `SolveResult` |
+| Dataset evaluation | `eval.py` | `Evaluator`, `EvalConfig`, `EvalReport`, `HFTextDataset`, `AnswerExtractor`, metrics |
 | Shared utilities | `utils.py` / `metrics.py` | `load_model_and_tokenizer`, `speedup`, `mean_speedup` |
 | Pi agent layer | `branch_and_share/` | See `branch_and_share/AGENTS.md` |
 
@@ -38,6 +39,7 @@
 | `CacheAdapter` | class | `cache_adapter.py` | KV cache clone/expand |
 | `load_model_and_tokenizer` | function | `utils.py` | Bootstrap a HF model |
 | `BranchResult` / `SolveResult` | dataclass | `results.py` | Generation/verification results |
+| `Evaluator` | class | `eval.py` | Accuracy/speedup dataset evaluation harness |
 
 ## CONVENTIONS
 Same repo-wide: `py -3.11`, ruff/black line length 100, target py39, mypy target 3.11, pytest `test_*.py`. `MultiBranchEngine` is imported conditionally in `__init__.py` because it depends on `cache_adapter`/`model_adapter`, which may be absent in some worktrees.

@@ -55,6 +55,7 @@ This root file is the single source of truth for cross-repo conventions. Subsyst
 | `EngineConfig` / `RKSCConfig` / `RSBCMConfig` (`config.py`) | Top-level hyperparameters (branching factor, max new tokens, ASKS threshold `tau`, CGEE entropy thresholds, RSBCM capacity). |
 | `BranchResult` / `SolveResult` (`results.py`) | Dataclasses for generated text, confidence, verification score, early-exit layer, and timing. |
 | `Metrics` (`metrics.py`) | Simple `speedup` and `mean_speedup` helpers for benchmark scripts. |
+| `Evaluator` / `EvalConfig` / `EvalReport` (`eval.py`) | Dataset evaluation harness: answer extraction, pluggable metrics (`exact_match`, `numeric_match`, `contains`), and accuracy/speedup reporting. |
 | `TrajectoryMonitor` / `StagnationDetector` / `ExperiencePacket` (`branch_and_share/`) | Failure-aware Pi coding-agent layer: `TrajectoryMonitor` records tool calls, repo changes, tests, and tokens; `StagnationDetector` signals repeated commands/file reads, no test improvement, tool failures, code churn, and token-limit approach; `ExperiencePacketBuilder` grounds the summary in git, logs, and test output. |
 | `BranchAndShareEngine` (`branch_and_share/engine.py`) | Orchestrates running a Pi trajectory, branching on stagnation, sharing an experience packet, and resuming from the original state or a checkpoint. Hardened to return a `ShareResult`, writes a JSONL session log, and exposes `report() -> BranchSessionReport`. |
 | `BranchSessionLogger` (`branch_and_share/logging.py`) | Writes JSON-lines session logs to `<repo_root>/.reasonflow/sessions/<iso-timestamp>.jsonl`; validates path stays inside repo root and degrades to no-op when disabled. |
@@ -102,12 +103,15 @@ src/reasonflow/
   branch_generator.py      Branch generation with ASKS gating
   results.py               BranchResult, SolveResult dataclasses
   metrics.py               Speedup helpers
+  eval.py                  Dataset evaluation harness
+
 docs/
   branch_and_share.md    JSON event protocol, custom PiAdapter guide, branching/seeding, and logging/reporting
 
 examples/
   simple_demo.py           Single-problem RKSC vs baseline demo
   benchmark_demo.py        Multi-problem benchmark
+  eval_demo.py             Dataset accuracy/speedup evaluation demo
   branch_and_share_demo.py End-to-end branch_and_share demo with git worktrees and a subprocess agent
   pi_agent_stream.py       Streaming demo that tails a live JSONL event log
 

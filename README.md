@@ -68,6 +68,32 @@ print(f"Speedup vs baseline: {engine.baseline_solve(result.problem).total_time_m
   search.
 - `reasonflow.engine.MultiBranchEngine` — end-to-end branch generation and
   verification.
+- `reasonflow.eval.Evaluator` — accuracy/speedup evaluation on reasoning datasets
+  with answer extraction and pluggable metrics.
+
+### Evaluating on a dataset
+
+```python
+from reasonflow import EngineConfig, MultiBranchEngine, load_model_and_tokenizer
+from reasonflow.eval import EvalConfig, Evaluator, HFTextDataset
+
+model, tokenizer = load_model_and_tokenizer("Qwen/Qwen3.5-0.8B")
+cfg = EngineConfig(branching_factor=2, max_new_tokens=32)
+engine = MultiBranchEngine(model, tokenizer, cfg)
+
+eval_cfg = EvalConfig(max_problems=50, metric="numeric_match")
+dataset = HFTextDataset.from_name("openai/gsm8k", split="test", max_problems=50)
+evaluator = Evaluator(engine, eval_cfg)
+report = evaluator.run(dataset)
+print(f"Accuracy: {report.accuracy:.3f}, Speedup: {report.speedup:.2f}x")
+report.save_json("eval_report.json")
+```
+
+Or run the CLI demo:
+
+```bash
+py -3.11 examples/eval_demo.py --max-problems 10 --metric numeric_match
+```
 
 ## Math snapshot
 
@@ -101,11 +127,20 @@ src/reasonflow/
   asks.py
   cgee.py
   cache.py
+  cache_adapter.py
+  model_adapter.py
+  branch_generator.py
+  decoder.py
+  sampler.py
+  verifier.py
   engine.py
+  eval.py
+  results.py
   metrics.py
 examples/
   simple_demo.py
   benchmark_demo.py
+  eval_demo.py
 tests/
   test_*.py
 ```
