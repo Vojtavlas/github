@@ -29,5 +29,3 @@ class SolveResult:
     verification_time_ms: float = 0.0
     total_time_ms: float = 0.0
     skipped_verification: bool = False
-    baseline_time_ms: float = 0.0
-    speedup: float = 1.0

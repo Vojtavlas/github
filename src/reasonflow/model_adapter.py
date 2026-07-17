@@ -6,6 +6,13 @@ from typing import List
 import torch.nn as nn
 
 
+def _ensure_non_empty(layers):
+    """Validate and return a non-empty list of transformer layers."""
+    if not layers:
+        raise ValueError("Transformer layers list is empty")
+    return list(layers)
+
+
 class ModelAdapter(ABC):
     """Abstract base class for architecture-specific layer extraction."""
 
@@ -24,30 +31,33 @@ class LlamaAdapter(ModelAdapter):
     """Adapter for LLaMA-style models (``model.model.layers``)."""
 
     def matches(self, model) -> bool:
-        return hasattr(model, "model") and hasattr(model.model, "layers")
+        inner = getattr(model, "model", None)
+        return isinstance(getattr(inner, "layers", None), nn.ModuleList)
 
     def get_layers(self, model) -> List[nn.Module]:
-        return list(model.model.layers)
+        return _ensure_non_empty(model.model.layers)
 
 
 class GPT2Adapter(ModelAdapter):
     """Adapter for GPT-2-style models (``model.transformer.h``)."""
 
     def matches(self, model) -> bool:
-        return hasattr(model, "transformer") and hasattr(model.transformer, "h")
+        inner = getattr(model, "transformer", None)
+        return isinstance(getattr(inner, "h", None), nn.ModuleList)
 
     def get_layers(self, model) -> List[nn.Module]:
-        return list(model.transformer.h)
+        return _ensure_non_empty(model.transformer.h)
 
 
 class GPTNeoXAdapter(ModelAdapter):
     """Adapter for GPT-NeoX-style models (``model.gpt_neox.layers``)."""
 
     def matches(self, model) -> bool:
-        return hasattr(model, "gpt_neox") and hasattr(model.gpt_neox, "layers")
+        inner = getattr(model, "gpt_neox", None)
+        return isinstance(getattr(inner, "layers", None), nn.ModuleList)
 
     def get_layers(self, model) -> List[nn.Module]:
-        return list(model.gpt_neox.layers)
+        return _ensure_non_empty(model.gpt_neox.layers)
 
 
 class HeuristicAdapter(ModelAdapter):
@@ -59,11 +69,11 @@ class HeuristicAdapter(ModelAdapter):
     def get_layers(self, model) -> List[nn.Module]:
         for name, module in model.named_modules():
             if (
-                name.count(".") == 2
-                and ("layers" in name or name.endswith(".h"))
+                ("layers" in name or name.endswith(".h"))
                 and isinstance(module, nn.ModuleList)
+                and len(module) > 0
             ):
-                return list(module)
+                return _ensure_non_empty(module)
         raise ValueError("Could not locate transformer layers for CGEE hooks")
 
 
@@ -82,6 +92,8 @@ class ModelAdapterRegistry:
         for adapter in self._adapters:
             if adapter.matches(model):
                 return adapter
+        # This is dead code with the default registry because HeuristicAdapter
+        # always matches, but it is kept as a safety net for custom registries.
         raise ValueError("No matching adapter found for model")
 
     def get_layers(self, model) -> List[nn.Module]:

@@ -34,6 +34,11 @@ class Decoder:
         pkv = past_key_values
         eos_id = self.tokenizer.eos_token_id
 
+        if first_input_ids.size(0) != 1:
+            raise ValueError(
+                f"Decoder currently only supports batch_size == 1, got {first_input_ids.size(0)}"
+            )
+
         for _ in range(max_new_tokens):
             if finished:
                 break
@@ -86,6 +91,11 @@ class Decoder:
         curr_mask = attention_mask
         pkv = past_key_values
         eos_id = self.tokenizer.eos_token_id
+
+        if first_logits.size(0) != 1:
+            raise ValueError(
+                f"Decoder currently only supports batch_size == 1, got {first_logits.size(0)}"
+            )
 
         next_token, conf = self.sampler.sample(first_logits)
         generated.append(next_token)

@@ -52,3 +52,43 @@ def test_top_p_filters_low_probability_tail():
         mock_multi.side_effect = side_effect
         token_id, conf = sampler.sample(logits)
     assert token_id.item() == 0
+
+
+def test_negative_temperature_raises():
+    cfg = _config(temperature=-0.5)
+    sampler = Sampler(cfg)
+    with pytest.raises(ValueError):
+        sampler.sample(torch.tensor([[1.0, 2.0, 3.0]]))
+
+
+def test_very_small_positive_temperature_does_not_overflow():
+    cfg = _config(temperature=1e-8, top_p=1.0)
+    sampler = Sampler(cfg)
+    logits = torch.tensor([[1.0, 2.0, 3.0]])
+    token_id, conf = sampler.sample(logits)
+    assert torch.isfinite(conf).all()
+    assert token_id.item() == logits.argmax(dim=-1).item()
+
+
+@pytest.mark.parametrize("top_p", [0.0, -0.1, 1.5, 2.0])
+def test_top_p_out_of_range_raises(top_p):
+    cfg = _config(temperature=1.0, top_p=top_p)
+    sampler = Sampler(cfg)
+    with pytest.raises(ValueError):
+        sampler.sample(torch.tensor([[1.0, 2.0, 3.0]]))
+
+
+def test_top_p_one_equals_no_filtering():
+    cfg = _config(temperature=1.0, top_p=1.0)
+    sampler = Sampler(cfg)
+    logits = torch.tensor([[1.0, 2.0, 3.0]])
+    expected_probs = torch.softmax(logits, dim=-1)
+
+    def side_effect(probs, **_):
+        assert torch.allclose(probs, expected_probs, atol=1e-6)
+        return torch.tensor([[2]])
+
+    with patch("torch.multinomial") as mock_multi:
+        mock_multi.side_effect = side_effect
+        token_id, conf = sampler.sample(logits)
+    assert token_id.item() == 2

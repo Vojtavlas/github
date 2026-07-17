@@ -32,7 +32,7 @@ class EntropyTracker:
     @staticmethod
     def _entropy(logits: torch.Tensor) -> torch.Tensor:
         """Return the per-sample Shannon entropy of a logit distribution."""
-        probs = torch.softmax(logits, dim=-1)
+        probs = torch.softmax(logits, dim=-1).float()
         return -(probs * (probs + 1e-10).log()).sum(dim=-1)
 
     def update(self, layer_idx: int, hidden_state: torch.Tensor) -> float:
@@ -190,9 +190,11 @@ class CGEEAnalyzer:
         """Level 1 gate: is the highest-confidence branch decisive?"""
         if not confidences:
             return False
+        if not all(0.0 <= c <= 1.0 for c in confidences):
+            raise ValueError("confidences must be in [0, 1]")
         sorted_conf = sorted(confidences, reverse=True)
         top = sorted_conf[0]
-        second = sorted_conf[1] if len(sorted_conf) > 1 else 0.0
+        second = sorted_conf[1] if len(sorted_conf) > 1 else top
         if top < self.cfg.gen_conf_threshold:
             return False
         if self.cfg.use_relative_gap:

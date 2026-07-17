@@ -2,6 +2,7 @@ from .asks import ASKSManager
 from .cache import RSBCMManager
 from .cgee import CGEEAnalyzer
 from .config import EngineConfig, RKSCConfig, RSBCMConfig
+from .metrics import mean_speedup, speedup
 from .results import BranchResult, SolveResult
 from .utils import load_model_and_tokenizer
 
@@ -17,6 +18,8 @@ __all__ = [
     "CGEEAnalyzer",
     "RSBCMManager",
     "load_model_and_tokenizer",
+    "speedup",
+    "mean_speedup",
 ]
 
 # The engine depends on cross-worktree adapter modules (cache_adapter,
