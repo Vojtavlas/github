@@ -7,6 +7,7 @@ from .branch_manager import BranchManager, BranchStartPoint
 from .config import BranchAndShareConfig
 from .control import TrajectoryControl
 from .detector import StagnationDetector
+from .logging import BranchSessionLogger
 from .metrics import MetricsTracker
 from .monitor import TrajectoryMonitor
 from .results import (
@@ -46,6 +47,7 @@ class BranchSessionLauncher:
         branch_id: int,
         last_packet: Optional[ExperiencePacket],
         start_point: Optional[BranchStartPoint] = None,
+        logger: Optional[BranchSessionLogger] = None,
     ) -> Tuple[BranchContext, TrajectoryOutcome, TrajectoryControl]:
         """Create a branch, seed it with ``last_packet``, and run the agent.
 
@@ -95,7 +97,26 @@ class BranchSessionLauncher:
         monitor = TrajectoryMonitor(git_repo_root=git_root)
         detector = StagnationDetector(self.config.stagnation)
         metrics = MetricsTracker()
-        control = TrajectoryControl(monitor, detector, metrics, self.config)
+        control = TrajectoryControl(
+            monitor,
+            detector,
+            metrics,
+            self.config,
+            logger=logger,
+            branch_id=context.branch_id,
+        )
+
+        if logger is not None:
+            logger.log_event(
+                branch_id=context.branch_id,
+                kind="branch_start",
+                elapsed_ms=0.0,
+                payload={
+                    "worktree_path": context.worktree_path,
+                    "start_ref": context.start_ref,
+                    "start_commit": context.start_commit,
+                },
+            )
 
         try:
             runner = self.runner_factory()
@@ -127,5 +148,15 @@ class BranchSessionLauncher:
             )
         finally:
             metrics.stop()
+
+        if logger is not None:
+            snapshot = metrics.snapshot()
+            logger.log_event(
+                branch_id=context.branch_id,
+                kind="status",
+                elapsed_ms=snapshot.wall_clock_ms,
+                outcome=outcome.status.value,
+                payload={"error": outcome.error},
+            )
 
         return context, outcome, control

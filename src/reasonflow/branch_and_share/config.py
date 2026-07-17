@@ -1,6 +1,6 @@
 """Configuration dataclasses for branch_and_share."""
-
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass
@@ -48,6 +48,7 @@ class BranchAndShareConfig:
     reuse_checkpoints: bool = True
     timeout_seconds: float = 60.0
     heartbeat_interval: float = 0.05
+    log_repo_root: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.max_history < 0:
