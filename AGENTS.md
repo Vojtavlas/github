@@ -8,6 +8,7 @@
 - **Python interpreter:** Use system Python 3.11. The default shell `python`/`pytest` points to a Hermes venv without `torch`.
 - **Install:** `py -3.11 -m pip install -e .` (or `py -3.11 -m pip install -e ".[dev]"` for dev tools).
 - **Run a demo:** `py -3.11 examples/simple_demo.py --max-new-tokens 10`
+- **Benchmark:** `py -3.11 examples/benchmark_demo.py --max-new-tokens 32`
 - **Lint:** `ruff check src tests examples`
 - **Test (skip engine integration):**
   - PowerShell: `$env:SKIP_ENGINE_TESTS = "1"; py -3.11 -m pytest -q`
@@ -35,7 +36,7 @@ The public API lives in `src/reasonflow/__init__.py` and the main entry point is
 | `Branch hint` | One of `DEFAULT_BRANCH_HINTS` appended to the prefix to encourage a different reasoning strategy per branch. |
 | `ASKSManager` (`asks.py`) | Captures root hidden states and KV cache; delegates similarity computation to a `SimilarityMetric` and layer weighting to a `WeightingStrategy`; gates whether a branch can reuse the root KV cache (`score_branch`). |
 | `SimilarityMetric` / `WeightingStrategy` (`asks.py`) | Pluggable seam behind ASKS: `SimilarityMetric` computes per-layer or scalar similarity; `WeightingStrategy` combines layer scores (exponential or uniform). |
-| `BranchGenerator` (`branch_generator.py`) | Builds a branch prompt, runs prefix+hint prefill, checks ASKS, and decodes. `generate_baseline_branch` generates from scratch (no KV reuse). |
+| `BranchGenerator` (`branch_generator.py`) | Builds a branch prompt, runs prefix+hint prefill, checks ASKS, and decodes directly from the prefill output (no re-tokenization fallback). Patches the torch linear-attention fallback chunk size for short suffixes. `generate_baseline_branch` generates from scratch (no KV reuse). |
 | `Decoder` + `Sampler` (`decoder.py`, `sampler.py`) | Autoregressive decoding with temperature, top-p, or greedy; returns token sequence and mean generation confidence. |
 | `CGEEAnalyzer` (`cgee.py`) | Two-level confidence gating. Level 1: skip verification if one branch is confident and leads by a wide gap. Level 2: exit the verifier forward pass early when per-layer output entropy becomes low and stable. Composes `EntropyTracker`, `EarlyExitStrategy`, and `HookAdapter`. |
 | `Verifier` (`verifier.py`) | Prompts the model with `"Is this answer correct? Answer YES or NO."` and scores the answer by the probability of `YES`. |
@@ -126,6 +127,18 @@ Use `ce-worktree` (preferred) or `using-git-worktrees` when starting isolated fe
 - Engine integration tests in `test_engine.py` load `Qwen/Qwen3.5-0.8B` and are skipped when `SKIP_ENGINE_TESTS=1`.
 - Prefer real code over mocks unless unavoidable.
 - The current baseline is: `ruff check src tests examples` clean; `SKIP_ENGINE_TESTS=1 py -3.11 -m pytest -q` reports `123 passed, 4 skipped`; a full run `py -3.11 -m pytest -q` reports `127 passed`.
+
+## Benchmark conventions
+
+- Run: `py -3.11 examples/benchmark_demo.py --max-new-tokens 32`.
+- Use `--warmup 1` and `--runs 3` (or more) and alternate RKSC/baseline order to avoid GPU/cache-order bias.
+- `torch.cuda.synchronize()` is used around each timed call for wall-clock GPU measurements.
+- Default to greedy (`--temperature 0.0`) for stable, reproducible speed comparisons.
+- Report mean speedup across the problem set, not a single prompt.
+- Current reference result (RTX 3050, Qwen 0.8B, `max_new_tokens=32`, 3 runs, 1 warmup):
+  - Mean RKSC: 3042.3 ms
+  - Mean baseline: 3635.7 ms
+  - Speedup: 1.20x
 
 ## Skill map: what to use and when
 
