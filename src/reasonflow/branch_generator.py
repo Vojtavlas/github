@@ -1,10 +1,10 @@
 """Generate a single reasoning branch, with ASKS gating and baseline fallback."""
 
-from typing import Callable, Dict, Optional, cast
+from typing import Any, Callable, Dict, List, Optional, cast
 
 import torch
 
-from .cache_adapter import clone_kv_cache
+from .cache_adapter import clone_kv_cache, expand_kv, get_cache_adapter, select_kv_cache_rows
 from .config import EngineConfig
 from .decoder import Decoder
 from .results import BranchResult
@@ -176,6 +176,141 @@ class BranchGenerator:
             full_text=full_text,
             generation_confidence=conf,
         )
+
+    def _can_batch(self, prefix_pkv: Any) -> bool:
+        """Return True iff ``prefix_pkv`` can be expanded and row-selected."""
+        if prefix_pkv is None:
+            return False
+        try:
+            get_cache_adapter(prefix_pkv)
+        except TypeError:
+            return False
+        return True
+
+    def generate_batch(
+        self,
+        problem: str,
+        branch_ids: List[int],
+        prefix_ids: torch.Tensor,
+        prefix_pkv,
+        prefix_len: int,
+    ) -> List[BranchResult]:
+        """Generate many branches with one batched prefill + ASKS partitioning."""
+        if not branch_ids:
+            return []
+
+        if not self._can_batch(prefix_pkv):
+            return [
+                self.generate(problem, b, prefix_ids, prefix_pkv, prefix_len)
+                for b in branch_ids
+            ]
+
+        B = len(branch_ids)
+        prefix_str = self.shared_prefix(problem)
+
+        suffix_id_list = [
+            self._tokenize("\n" + self.branch_hint(b), add_special_tokens=False)["input_ids"]
+            for b in branch_ids
+        ]
+        suffix_lens = [s.shape[1] for s in suffix_id_list]
+        max_L = max(suffix_lens)
+
+        pad_token_id = getattr(self.tokenizer, "pad_token_id", None)
+        if pad_token_id is None:
+            pad_token_id = getattr(self.tokenizer, "eos_token_id", 1)
+        if pad_token_id is None:
+            pad_token_id = 1
+
+        suffix_ids = torch.full((B, max_L), pad_token_id, dtype=torch.long, device=self.device)
+        suffix_mask = torch.zeros((B, max_L), dtype=torch.long, device=self.device)
+        position_ids = torch.zeros((B, max_L), dtype=torch.long, device=self.device)
+        for b, ids in enumerate(suffix_id_list):
+            L = ids.shape[1]
+            start = max_L - L
+            suffix_ids[b, start:] = ids[0]
+            suffix_mask[b, start:] = 1
+            position_ids[b, start:] = torch.arange(prefix_len, prefix_len + L, device=self.device)
+
+        prefix_mask = torch.ones((B, prefix_len), dtype=torch.long, device=self.device)
+        attention_mask = torch.cat([prefix_mask, suffix_mask], dim=1)
+
+        if B == 1:
+            expanded_pkv = expand_kv(self.clone_kv_cache(prefix_pkv), B)
+        else:
+            expanded_pkv = expand_kv(prefix_pkv, B)
+
+        with torch.inference_mode():
+            prefill_out = self.model(
+                input_ids=suffix_ids,
+                attention_mask=attention_mask,
+                past_key_values=expanded_pkv,
+                use_cache=True,
+                output_hidden_states=True,
+                position_ids=position_ids,
+            )
+
+        verdicts = self.asks.score_branches(branch_ids, prefill_out.hidden_states)
+        approved_idx = [i for i, b in enumerate(branch_ids) if verdicts.get(b, False)]
+        rejected_idx = [i for i, b in enumerate(branch_ids) if not verdicts.get(b, False)]
+
+        results: List[Optional[BranchResult]] = [None] * B
+
+        if approved_idx:
+            selected_cache = select_kv_cache_rows(prefill_out.past_key_values, approved_idx)
+            first_logits = prefill_out.logits[approved_idx, -1, :]
+
+            init_len = prefix_len + max_L
+            total_len = init_len + self.config.max_new_tokens
+            decode_mask = torch.zeros(
+                (len(approved_idx), total_len),
+                dtype=torch.long,
+                device=self.device,
+            )
+            decode_mask[:, :init_len] = attention_mask[approved_idx]
+
+            approved_seq_lens = [prefix_len + suffix_lens[i] for i in approved_idx]
+
+            if self.config.max_new_tokens == 0:
+                generated_ids_list = [
+                    suffix_ids.new_empty((0,), device=self.device) for _ in approved_idx
+                ]
+                confidences = [0.0] * len(approved_idx)
+            else:
+                generated_ids_list, confidences = self.decoder.decode_batch(
+                    first_logits,
+                    selected_cache,
+                    decode_mask,
+                    self.config.max_new_tokens,
+                    approved_seq_lens,
+                )
+
+            for j, batch_idx in enumerate(approved_idx):
+                branch_id = branch_ids[batch_idx]
+                hint = self.branch_hint(branch_id)
+                generated_ids = generated_ids_list[j]
+                real_suffix_start = max_L - suffix_lens[batch_idx]
+                real_suffix = suffix_ids[batch_idx, real_suffix_start:]
+
+                full_sequence = torch.cat(
+                    [prefix_ids, real_suffix.unsqueeze(0), generated_ids.unsqueeze(0)], dim=1
+                )
+                full_text = self.tokenizer.decode(full_sequence[0], skip_special_tokens=True)
+                text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+                prompt = prefix_str + "\n" + hint
+
+                results[batch_idx] = BranchResult(
+                    branch_id=branch_id,
+                    prompt=prompt,
+                    text=text,
+                    full_text=full_text,
+                    generation_confidence=confidences[j],
+                )
+
+        for batch_idx in rejected_idx:
+            branch_id = branch_ids[batch_idx]
+            results[batch_idx] = self.generate_baseline_branch(problem, branch_id)
+
+        return results
 
     def generate_baseline_branch(self, problem: str, branch_id: int) -> BranchResult:
         """Public alias for baseline branch generation."""
