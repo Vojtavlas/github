@@ -47,6 +47,14 @@ The public API lives in `src/reasonflow/__init__.py` and the main entry point is
 | `EngineConfig` / `RKSCConfig` / `RSBCMConfig` (`config.py`) | Top-level hyperparameters (branching factor, max new tokens, ASKS threshold `tau`, CGEE entropy thresholds, RSBCM capacity). |
 | `BranchResult` / `SolveResult` (`results.py`) | Dataclasses for generated text, confidence, verification score, early-exit layer, and timing. |
 | `Metrics` (`metrics.py`) | Simple `speedup` and `mean_speedup` helpers for benchmark scripts. |
+| `TrajectoryMonitor` / `StagnationDetector` / `ExperiencePacket` (`branch_and_share/`) | Failure-aware Pi coding-agent layer: `TrajectoryMonitor` records tool calls, repo changes, tests, and tokens; `StagnationDetector` signals repeated commands/file reads, no test improvement, tool failures, code churn, and token-limit approach; `ExperiencePacketBuilder` grounds the summary in git, logs, and test output. |
+| `BranchAndShareEngine` (`branch_and_share/engine.py`) | Orchestrates running a Pi trajectory, branching on stagnation, sharing an experience packet, and resuming from the original state or a checkpoint. |
+| `BranchManager` / `GitWorktreeBranchManager` / `MemoryBranchManager` (`branch_and_share/branch_manager.py`) | Creates isolated branches via git worktrees or in-memory references; checkpoints a stuck attempt so the next branch can start from it. |
+| `PiAdapter` / `MockPiAdapter` / `FileStreamPiAdapter` / `SubprocessPiAdapter` (`branch_and_share/adapter.py`) | Plugin seam for the Pi agent loop. `FileStreamPiAdapter` replays a newline-delimited JSON event file; `SubprocessPiAdapter` runs a command and replays its stdout events; `MockPiAdapter` replays scripted scenarios for tests. |
+| `ExperienceStore` (`branch_and_share/store.py`) | Append-only JSONL persistence for `ExperiencePacket`s. Loads recent packets for seeding the next branch. |
+| `BranchSessionLauncher` (`branch_and_share/launcher.py`) | Creates a branch, seeds `.branch_context.json`, runs the trajectory, and returns `(BranchContext, TrajectoryOutcome, TrajectoryControl)`. |
+| **JSON event protocol** | Newline-delimited JSON events consumed by adapters. Kinds: `tool_call`, `file_read`, `command`, `test`, `file_change`, `model_call`, `token_usage`, `hypothesis`, `discovery`, `status` (`success`/`error`/`stagnation`). |
+| `BranchAndShareConfig` / `StagnationConfig` (`branch_and_share/config.py`) | Top-level branch-and-share hyperparameters. |
 
 ## Project structure
 
@@ -54,6 +62,20 @@ The public API lives in `src/reasonflow/__init__.py` and the main entry point is
 src/reasonflow/
   __init__.py              Public exports; imports MultiBranchEngine only if adapters are present
   config.py                EngineConfig, RKSCConfig, RSBCMConfig
+  branch_and_share/        Failure-aware branching layer for Pi coding agents
+    __init__.py              Public exports
+    config.py                BranchAndShareConfig, StagnationConfig
+    results.py               Dataclasses: BranchContext, ExperiencePacket, ShareResult, BranchMetrics, ...
+    monitor.py               TrajectoryMonitor: tool/test/file/token history
+    detector.py              StagnationDetector and stagnation signals
+    packet.py                ExperiencePacketBuilder grounded in git/logs/tests
+    branch_manager.py        BranchManager, GitWorktreeBranchManager, MemoryBranchManager
+    metrics.py               MetricsTracker
+    adapter.py               PiAdapter, MockPiAdapter, FileStreamPiAdapter, SubprocessPiAdapter
+    launcher.py              BranchSessionLauncher
+    store.py                 ExperienceStore
+    control.py               TrajectoryControl passed to runners
+    engine.py                BranchAndShareEngine orchestration
   utils.py                 load_model_and_tokenizer, squeeze_hidden
   asks.py                  ASKSManager and pluggable SimilarityMetric / WeightingStrategy
   cgee.py                  CGEEAnalyzer, EntropyTracker, EarlyExitStrategy, HookAdapter
@@ -70,6 +92,7 @@ src/reasonflow/
 examples/
   simple_demo.py           Single-problem RKSC vs baseline demo
   benchmark_demo.py        Multi-problem benchmark
+   branch_and_share_demo.py End-to-end branch_and_share demo with git worktrees and a subprocess agent
 
 tests/
   test_asks.py
@@ -83,6 +106,8 @@ tests/
   test_model_adapter.py
   test_sampler.py
   test_verifier.py
+  test_branch_and_share.py
+   test_branch_and_share_integration.py  Integration tests for adapters, launcher, store, and engine
 
 .github/workflows/ci.yml   GitHub Actions CI
 pyproject.toml             Package metadata, dependencies, tool configs
@@ -126,7 +151,7 @@ Use `ce-worktree` (preferred) or `using-git-worktrees` when starting isolated fe
 - `pytest` with tests named `test_*.py`.
 - Engine integration tests in `test_engine.py` load `Qwen/Qwen3.5-0.8B` and are skipped when `SKIP_ENGINE_TESTS=1`.
 - Prefer real code over mocks unless unavoidable.
-- The current baseline is: `ruff check src tests examples` clean; `SKIP_ENGINE_TESTS=1 py -3.11 -m pytest -q` reports `123 passed, 4 skipped`; a full run `py -3.11 -m pytest -q` reports `127 passed`.
+- The current baseline is: `ruff check src tests examples` clean; `SKIP_ENGINE_TESTS=1 py -3.11 -m pytest -q` reports `141 passed, 4 skipped`; a full run `py -3.11 -m pytest -q` reports `145 passed`.
 
 ## Benchmark conventions
 
