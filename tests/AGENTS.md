@@ -23,7 +23,7 @@
 - Inline fixtures per file; prefer real code over mocks.
 - Use `tmp_path` for JSONL logs, git repos, and `ExperienceStore` files.
 - `test_engine.py` loads `Qwen/Qwen3.5-0.8B` and is skipped by `SKIP_ENGINE_TESTS=1`. `test_branch_and_share_integration.py` runs offline.
-- Baseline fast suite: `241 passed, 4 skipped`; full run: `240 passed, 5 skipped`.
+- Baseline fast suite: `255 passed, 4 skipped`; full run: `254 passed, 5 skipped`.
 
 ## ANTI-PATTERNS
 - Do not add HF model-dependent tests without a `SKIP_ENGINE_TESTS` guard.
