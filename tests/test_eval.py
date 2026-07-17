@@ -4,6 +4,8 @@ from reasonflow.eval import (
     AnswerExtractor,
     ContainsMetric,
     EvalConfig,
+    EvalReport,
+    EvalResult,
     ExactMatchMetric,
     HFTextDataset,
     InMemoryDataset,
@@ -101,3 +103,58 @@ def test_get_metric():
     assert isinstance(get_metric("contains"), ContainsMetric)
     with pytest.raises(ValueError):
         get_metric("unknown")
+
+
+def test_eval_report_aggregates():
+    results = [
+        EvalResult(
+            problem_id="1",
+            problem="2+2?",
+            gold="4",
+            rksc_prediction="4",
+            baseline_prediction="4",
+            rksc_score=1.0,
+            baseline_score=1.0,
+            rksc_ms=100.0,
+            baseline_ms=120.0,
+        ),
+        EvalResult(
+            problem_id="2",
+            problem="3+3?",
+            gold="6",
+            rksc_prediction="5",
+            baseline_prediction="6",
+            rksc_score=0.0,
+            baseline_score=1.0,
+            rksc_ms=200.0,
+            baseline_ms=240.0,
+        ),
+    ]
+    report = EvalReport.from_results(results)
+    assert report.accuracy == 0.5
+    assert report.baseline_accuracy == 1.0
+    assert report.speedup == 360.0 / 300.0
+    assert len(report.results) == 2
+
+
+def test_eval_report_save_json(tmp_path):
+    result = EvalResult(
+        problem_id="1",
+        problem="2+2?",
+        gold="4",
+        rksc_prediction="4",
+        baseline_prediction="4",
+        rksc_score=1.0,
+        baseline_score=1.0,
+        rksc_ms=100.0,
+        baseline_ms=120.0,
+    )
+    report = EvalReport.from_results([result])
+    out = tmp_path / "report.json"
+    report.save_json(str(out))
+    import json
+
+    data = json.loads(out.read_text())
+    assert data["accuracy"] == 1.0
+    assert data["speedup"] == 1.2
+    assert len(data["results"]) == 1

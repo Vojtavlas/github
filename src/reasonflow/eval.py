@@ -1,8 +1,10 @@
 """Evaluation harness for accuracy and speedup benchmarking."""
 
+import csv
+import json
 import re
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Protocol, Tuple, Union
 
 
@@ -158,6 +160,73 @@ def get_metric(name: str) -> Metric:
     if name not in _METRICS:
         raise ValueError(f"Unknown metric '{name}'. Choose from {list(_METRICS)}.")
     return _METRICS[name]()
+
+
+@dataclass
+class EvalResult:
+    problem_id: str
+    problem: str
+    gold: str
+    rksc_prediction: str
+    baseline_prediction: str
+    rksc_score: float
+    baseline_score: float
+    rksc_ms: float
+    baseline_ms: float
+
+
+@dataclass
+class EvalReport:
+    accuracy: float
+    baseline_accuracy: float
+    speedup: float
+    rksc_ms: float
+    baseline_ms: float
+    results: List[EvalResult]
+
+    @classmethod
+    def from_results(cls, results: List[EvalResult]) -> "EvalReport":
+        if not results:
+            return cls(
+                accuracy=0.0,
+                baseline_accuracy=0.0,
+                speedup=1.0,
+                rksc_ms=0.0,
+                baseline_ms=0.0,
+                results=[],
+            )
+        rksc_scores = [r.rksc_score for r in results]
+        baseline_scores = [r.baseline_score for r in results]
+        total_rksc = sum(r.rksc_ms for r in results)
+        total_baseline = sum(r.baseline_ms for r in results)
+        speedup = total_baseline / total_rksc if total_rksc > 0 else float("nan")
+        return cls(
+            accuracy=sum(rksc_scores) / len(rksc_scores),
+            baseline_accuracy=sum(baseline_scores) / len(baseline_scores),
+            speedup=speedup,
+            rksc_ms=total_rksc,
+            baseline_ms=total_baseline,
+            results=results,
+        )
+
+    def save_json(self, path: str) -> None:
+        data = {
+            "accuracy": self.accuracy,
+            "baseline_accuracy": self.baseline_accuracy,
+            "speedup": self.speedup,
+            "rksc_ms": self.rksc_ms,
+            "baseline_ms": self.baseline_ms,
+            "results": [asdict(r) for r in self.results],
+        }
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+
+    def save_csv(self, path: str) -> None:
+        with open(path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["problem_id", "problem", "gold", "rksc_prediction", "baseline_prediction", "rksc_score", "baseline_score", "rksc_ms", "baseline_ms"])
+            writer.writeheader()
+            for r in self.results:
+                writer.writerow(asdict(r))
 
 
 class HFTextDataset:
